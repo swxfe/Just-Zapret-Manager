@@ -1,0 +1,5 @@
+# Замените/дополните адресами, которые требуется проверить на вашем подключении.
+https://www.youtube.com/
+# Диагностика доступности инфраструктуры Googlevideo (не замер скорости видео).
+https://redirector.googlevideo.com/report_mapping
+https://discord.com/

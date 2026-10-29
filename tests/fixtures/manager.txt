@@ -1,0 +1,2 @@
+strategy_v99() { printf '%s\n' "#v99" "--filter-tcp=443" "--dpi-desync=multisplit"; }
+Dv99=$'--filter-tcp=2053,2083,2087,2096,8443\n--hostlist-domains=discord.media\n--dpi-desync=fake'

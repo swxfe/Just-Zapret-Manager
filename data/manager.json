@@ -1,0 +1,18 @@
+{
+  "root": "/",
+  "connect_timeout": 4,
+  "request_timeout": 10,
+  "settle_seconds": 2,
+  "max_file_bytes": 2097152,
+  "max_domains": 50000,
+  "max_strategies": 256,
+  "max_urls": 64,
+  "hostlist_urls": {
+    "exclude": "https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/zapret-hosts-user-exclude.txt"
+  },
+  "updater": {
+    "repo": "swxfe/just-zapret-manager",
+    "branch": "main",
+    "path": "dist/just-zapret-manager.sh"
+  }
+}

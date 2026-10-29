@@ -1,0 +1,14 @@
+{
+  "manager_repo": "StressOzz/Zapret-Manager",
+  "flowseal_repo": "Flowseal/zapret-discord-youtube",
+  "installer_repo": "remittor/zapret-openwrt",
+  "branch": "main",
+  "tcp_ports": "2099,2802,2302,2502,3478-3480,3724,6000-8000,8085,8090,8100,8903,8904,25565,27015-27030,27036-27037,35500-35600,50001,60442",
+  "udp_ports": "88,1024-2407,2409-4499,4502-19293,19345-49999,50101-65535",
+  "fake_aliases": {
+    "ACTIVE_DISCORD_UDP.bin": "quic_initial_steamcommunity_com.bin",
+    "ACTIVE_GAME_UDP.bin": "quic_initial_4pda_to.bin",
+    "tls_clienthello_4pda_to.bin": "4pda.bin",
+    "tls_clienthello_max_ru.bin": "tls_clienthello_www_onetrust_com.bin"
+  }
+}

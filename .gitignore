@@ -1,0 +1,19 @@
+/dist/*
+!/dist/just-zapret-manager.sh
+/.test-tmp/
+*.out
+/.emulator/
+nand-*/
+nor-*/
+emmc-*/
+work/
+*.sock
+__pycache__/
+
+# Local reports, editor state and Python caches
+/reports/
+*.pyc
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

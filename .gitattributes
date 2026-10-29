@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.uc text eol=lf
+justfile text eol=lf
+*.bin binary
+# Unified diff context preserves the upstream source's exact whitespace.
+*.patch -whitespace

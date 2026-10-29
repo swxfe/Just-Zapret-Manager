@@ -1,0 +1,66 @@
+diff --git a/compiler.c b/compiler.c
+index 0713722..1347bfe 100644
+--- a/compiler.c
++++ b/compiler.c
+@@ -3440,11 +3440,12 @@ static char *
+ uc_compiler_canonicalize_path(const char *path, const char *runpath)
+ {
+ 	char *p, *resolved;
++	const char *slash = runpath ? strrchr(runpath, '/') : NULL;
+ 
+ 	if (*path == '/')
+ 		xasprintf(&p, "%s", path);
+-	else if (runpath && (p = strrchr(runpath, '/')) != NULL)
+-		xasprintf(&p, "%.*s/%s", (int)(p - runpath), runpath, path);
++	else if (slash)
++		xasprintf(&p, "%.*s/%s", (int)(slash - runpath), runpath, path);
+ 	else
+ 		xasprintf(&p, "./%s", path);
+ 
+@@ -3461,15 +3462,15 @@ uc_compiler_expand_module_path(const char *name, const char *runpath, const char
+ 	int namelen, prefixlen;
+ 	char *path, *p;
+ 
+-	p = strchr(template, '*');
++	const char *star = strchr(template, '*');
+ 
+-	if (!p)
++	if (!star)
+ 		return NULL;
+ 
+-	prefixlen = p - template;
++	prefixlen = star - template;
+ 	namelen = strlen(name);
+ 
+-	xasprintf(&path, "%.*s%.*s%s", prefixlen, template, namelen, name, p + 1);
++	xasprintf(&path, "%.*s%.*s%s", prefixlen, template, namelen, name, star + 1);
+ 
+ 	for (p = path + prefixlen; namelen > 0; namelen--, p++)
+ 		if (*p == '.')
+@@ -3559,7 +3560,7 @@ uc_compiler_is_dynlink_module(uc_compiler_t *compiler, const char *name, const c
+ {
+ 	uc_search_path_t *dynlink_list = &compiler->parser->config->force_dynlink_list;
+ 	size_t i;
+-	char *p;
++	const char *p;
+ 
+ 	for (i = 0; i < dynlink_list->count; i++)
+ 		if (!strcmp(dynlink_list->entries[i], name))
+diff --git a/lib.c b/lib.c
+index cc1453c..c7e3b48 100644
+--- a/lib.c
++++ b/lib.c
+@@ -3644,10 +3644,10 @@ include_path(const char *curpath, const char *incpath)
+ 	if (*incpath == '/')
+ 		return realpath(incpath, NULL);
+ 
+-	dup = curpath ? strrchr(curpath, '/') : NULL;
++	const char *slash = curpath ? strrchr(curpath, '/') : NULL;
+ 
+-	if (dup)
+-		len = asprintf(&res, "%.*s/%s", (int)(dup - curpath), curpath, incpath);
++	if (slash)
++		len = asprintf(&res, "%.*s/%s", (int)(slash - curpath), curpath, incpath);
+ 	else
+ 		len = asprintf(&res, "./%s", incpath);
+ 
