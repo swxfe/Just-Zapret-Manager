@@ -1,5 +1,5 @@
 #!/bin/sh
-# JZM_VERSION=0.1.0
+# JZM_VERSION=0.1.1
 # JZM_FORMAT=2
 # Generated from src/. This file contains readable shell and ucode source.
 set -eu
@@ -2206,12 +2206,12 @@ https://redirector.googlevideo.com/report_mapping
 https://discord.com/
 `;
 EMBEDDED_DATA['strategies.txt'] = EMBEDDED_STRATEGIES;
-const EMBEDDED_HEADER = "#!/bin/sh\n# JZM_VERSION=0.1.0\n# JZM_FORMAT=2\n# Generated from src/. This file contains readable shell and ucode source.\nset -eu\nJZM_PID=$$\nexport JZM_PID\ncommand -v ucode >/dev/null 2>&1 || {\n    printf '%s\\n' 'jzm: требуется ucode и пакет ucode-mod-fs' >&2\n    exit 127\n}\n[ \"${JZM_MODE:-}\" = command ] || [ \"$#\" -eq 0 ] || {\n    printf '%s\\n' 'Запустите менеджер без аргументов: jzm' >&2\n    exit 2\n}\n";
+const EMBEDDED_HEADER = "#!/bin/sh\n# JZM_VERSION=0.1.1\n# JZM_FORMAT=2\n# Generated from src/. This file contains readable shell and ucode source.\nset -eu\nJZM_PID=$$\nexport JZM_PID\ncommand -v ucode >/dev/null 2>&1 || {\n    printf '%s\\n' 'jzm: требуется ucode и пакет ucode-mod-fs' >&2\n    exit 127\n}\n[ \"${JZM_MODE:-}\" = command ] || [ \"$#\" -eq 0 ] || {\n    printf '%s\\n' 'Запустите менеджер без аргументов: jzm' >&2\n    exit 2\n}\n";
 const EMBEDDED_FOOTER = "# Source is compiled in memory. Separate environment values stay below Linux's\n# per-argument limit; stdin remains available to the terminal menu and blockcheck.\n# This value is ucode source passed as one interpreter argument.\n# shellcheck disable=SC2089\nJZM_BOOTSTRAP='let source = \"\"; for (let i = 1; i <= +getenv(\"JZM_PARTS\"); i++) source += getenv(\"JZM_UCODE_\" + i) + \"\\n\"; loadstring(source, { strict_declarations: true })();'\nZM_HOME=${ZM_HOME:-/}\n# shellcheck disable=SC2090\nexport JZM_BOOTSTRAP ZM_HOME\nexec ucode -S -e \"$JZM_BOOTSTRAP\" -- \"$@\"\n";
 
 // ---- src/lib/resources.uc ----
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 
 // The bundler replaces these accessors with references to generated constants.
 function embedded_data() { return EMBEDDED_DATA; };
@@ -3607,7 +3607,7 @@ function test_menu(ctx) {
                 kind = selected == 1 ? 'manager' : 'flowseal';
             }
             if (c == 5) {
-                check(fs.stat(ctx.root + '/usr/bin/jzm') != null, 'сначала установите команду jzm из главного меню');
+                check(fs.stat(ctx.root + '/usr/bin/jzm') != null, 'сначала установите JZM через установщик');
                 let hour = local_file('Час ежедневного запуска, 0–23', '4');
                 command(ctx, ['targets', file]);
                 command(ctx, ['source', 'export', kind, kind + '.txt']);
@@ -3802,7 +3802,6 @@ function menu(initial, executor) {
         let labels = ['Установка / обновление / удаление', 'Запуск и автозапуск', 'Стратегии',
             'Тесты и автоподбор', 'Домены и исключения', 'Настройки Zapret', 'Резервные копии', 'Диагностика и восстановление'];
         for (let i = 0; i < length(labels); i++) menu_line(i + 1, labels[i]);
-        menu_line('i', 'Установить команду jzm');
         menu_line('u', 'Проверить обновления менеджера');
         menu_line('0', 'Выход'); print('\n');
         let value = prompt('Выберите пункт', null);
@@ -3821,12 +3820,6 @@ function menu(initial, executor) {
                 if (c) perform(() => command(ctx, [c == 1 ? 'doctor' : (c == 2 ? 'recover' : 'blockcheck')]));
                 break;
             }
-            case 'i':
-                perform(() => {
-                    install_manager(ctx);
-                    if (!getenv('DESTDIR')) ctx = settings(ctx.home, ctx.root + '/etc/zapret-manager/manager-config.json');
-                });
-                break;
             case 'u':
                 perform(() => {
                     let info = check_update(ctx);
@@ -3859,17 +3852,17 @@ function editable(ctx, key, value) {
     let booleans = ['DISABLE_IPV6', 'DISABLE_CUSTOM', 'ENABLED', 'DEBUG'];
     let ports = ['NFQWS_PORTS_TCP', 'NFQWS_PORTS_UDP'];
     if (index(booleans, key) != -1) check(value == '0' || value == '1', 'ожидается 0 или 1');
+    else if (index(ports, key) != -1) {
+        for (let range in split(value, ',')) {
+            check(match(range, /^[0-9]{1,5}(-[0-9]{1,5})?$/), 'неверный диапазон портов');
+            let pair = split(range, '-');
+            check(+pair[0] >= 1 && +pair[0] <= 65535 &&
 __JZM_JZM_UCODE_5__
 )
 export JZM_UCODE_5
 
 JZM_UCODE_6=$(cat <<'__JZM_JZM_UCODE_6__'
-else if (index(ports, key) != -1) {
-        for (let range in split(value, ',')) {
-            check(match(range, /^[0-9]{1,5}(-[0-9]{1,5})?$/), 'неверный диапазон портов');
-            let pair = split(range, '-');
-            check(+pair[0] >= 1 && +pair[0] <= 65535 &&
-                  (length(pair) == 1 || (+pair[1] >= +pair[0] && +pair[1] <= 65535)), 'порт вне диапазона');
+(length(pair) == 1 || (+pair[1] >= +pair[0] && +pair[1] <= 65535)), 'порт вне диапазона');
         }
     }
     else if (key == 'MODE_FILTER')
@@ -4355,14 +4348,14 @@ try {
         check(index(['manager', 'all'], args[0]) != -1, 'ожидается manager или all');
         if (args[0] == 'all') {
             check(!getenv('ZM_TRANSACTION'), 'пакетная операция внутри транзакции запрещена');
+            check(!fs.stat(ctx.root + '/tmp/zapret-manager.zapret.lock'), 'занято: выполняется другая операция');
+            run(ctx, 'package', ['remove']);
 __JZM_JZM_UCODE_6__
 )
 export JZM_UCODE_6
 
 JZM_UCODE_7=$(cat <<'__JZM_JZM_UCODE_7__'
-check(!fs.stat(ctx.root + '/tmp/zapret-manager.zapret.lock'), 'занято: выполняется другая операция');
-            run(ctx, 'package', ['remove']);
-            return backend(ctx, 'transaction', [...(fs.stat(ctx.file) ? ['--config', ctx.file] : []), 'uninstall-finish', 'all']) == 0 ? 0 : 1;
+return backend(ctx, 'transaction', [...(fs.stat(ctx.file) ? ['--config', ctx.file] : []), 'uninstall-finish', 'all']) == 0 ? 0 : 1;
         }
     }
     if (command == 'uninstall-finish') check(getenv('ZM_TRANSACTION'), 'внутренняя команда транзакции');

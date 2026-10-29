@@ -1,8 +1,7 @@
 import * as fs from 'fs';
 import { check, invoke } from 'common';
 import { VERSION } from 'resources';
-import { install_manager, update_status, check_update, apply_update, start_update_check } from 'manager';
-import { settings } from 'settings';
+import { update_status, check_update, apply_update, start_update_check } from 'manager';
 import { strategy_key, strategy_group, strategy_title, strategy_order } from 'strategies';
 import { source_data } from 'sources';
 import { device_list, excluded } from 'devices';
@@ -187,7 +186,7 @@ function test_menu(ctx) {
                 kind = selected == 1 ? 'manager' : 'flowseal';
             }
             if (c == 5) {
-                check(fs.stat(ctx.root + '/usr/bin/jzm') != null, 'сначала установите команду jzm из главного меню');
+                check(fs.stat(ctx.root + '/usr/bin/jzm') != null, 'сначала установите JZM через установщик');
                 let hour = local_file('Час ежедневного запуска, 0–23', '4');
                 command(ctx, ['targets', file]);
                 command(ctx, ['source', 'export', kind, kind + '.txt']);
@@ -382,7 +381,6 @@ export function menu(initial, executor) {
         let labels = ['Установка / обновление / удаление', 'Запуск и автозапуск', 'Стратегии',
             'Тесты и автоподбор', 'Домены и исключения', 'Настройки Zapret', 'Резервные копии', 'Диагностика и восстановление'];
         for (let i = 0; i < length(labels); i++) menu_line(i + 1, labels[i]);
-        menu_line('i', 'Установить команду jzm');
         menu_line('u', 'Проверить обновления менеджера');
         menu_line('0', 'Выход'); print('\n');
         let value = prompt('Выберите пункт', null);
@@ -401,12 +399,6 @@ export function menu(initial, executor) {
                 if (c) perform(() => command(ctx, [c == 1 ? 'doctor' : (c == 2 ? 'recover' : 'blockcheck')]));
                 break;
             }
-            case 'i':
-                perform(() => {
-                    install_manager(ctx);
-                    if (!getenv('DESTDIR')) ctx = settings(ctx.home, ctx.root + '/etc/zapret-manager/manager-config.json');
-                });
-                break;
             case 'u':
                 perform(() => {
                     let info = check_update(ctx);

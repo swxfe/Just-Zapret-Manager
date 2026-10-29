@@ -22,20 +22,17 @@ wget -O /tmp/jzm-install.sh https://raw.githubusercontent.com/swxfe/just-zapret-
 jzm
 ```
 
-## Ручной запуск
+## Ручная установка
 
 Если зависимости `ucode`, `ucode-mod-fs`, `uci`, `curl`, `ca-bundle` и `unzip` уже установлены:
 
 ```sh
 wget -O /tmp/just-zapret-manager.sh https://raw.githubusercontent.com/swxfe/just-zapret-manager/main/dist/just-zapret-manager.sh
-sh /tmp/just-zapret-manager.sh
-```
-
-В меню выберите **«Установить команду jzm»**. Для установки без меню:
-
-```sh
 JZM_MODE=command sh /tmp/just-zapret-manager.sh manager-install
+jzm
 ```
+
+Команда `jzm` создаётся установщиком автоматически; отдельного пункта для неё в меню нет.
 
 ## Стратегии
 

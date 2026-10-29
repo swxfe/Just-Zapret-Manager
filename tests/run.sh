@@ -575,10 +575,19 @@ bash -c 'printf "0\n" | sh <(cat "$1")' -- "$work/standalone.sh" > "$work/substi
 grep -q 'Установка / обновление / удаление' "$work/substitution.out"
 cat "$work/standalone.sh" | sh > "$work/stream.out"
 grep -q 'До встречи' "$work/stream.out"
-printf 'i\n\n0\n' | JZM_CONFIG=$work/manager.json DESTDIR=$work/bundle-image sh "$work/standalone.sh" > "$work/installed.out"
+printf '0\n' | JZM_CONFIG=$work/manager.json sh "$work/standalone.sh" > "$work/uninstalled-menu.out"
+if grep -q 'Установить команду jzm' "$work/uninstalled-menu.out"; then exit 1; fi
+# Installation is completed by the installer before the public menu opens.
+DESTDIR=$work/bundle-image JZM_MODE='command' sh "$work/standalone.sh" --config "$work/manager.json" manager-install > "$work/installed.out"
 equal_file "$work/standalone.sh" "$work/bundle-image/usr/bin/jzm"
 [ -x "$work/bundle-image/usr/bin/jzm" ]
-printf 'i\n\n0\n' | JZM_CONFIG=$work/manager.json DESTDIR=$work/bundle-image sh "$work/standalone.sh" > "$work/reinstalled.out"
+printf '0\n' | JZM_CONFIG=$work/manager.json DESTDIR=$work/bundle-image sh "$work/bundle-image/usr/bin/jzm" > "$work/installed-menu.out"
+if grep -q 'Установить команду jzm' "$work/installed-menu.out"; then exit 1; fi
+printf 'i\n\n0\n' | JZM_CONFIG=$work/manager.json DESTDIR=$work/bundle-image sh "$work/standalone.sh" > "$work/installed-shortcut.out"
+grep -q 'Нет такого пункта' "$work/installed-shortcut.out"
+[ ! -e "$work/bundle-image/usr/bin/jzm.previous" ]
+# Reinstallation remains available through the internal protocol, not a stale menu action.
+DESTDIR=$work/bundle-image JZM_MODE='command' sh "$work/standalone.sh" --config "$work/manager.json" manager-install > "$work/reinstalled.out"
 equal_file "$work/standalone.sh" "$work/bundle-image/usr/bin/jzm"
 equal_file "$work/standalone.sh" "$work/bundle-image/usr/bin/jzm.previous"
 [ -x "$work/bundle-image/usr/bin/jzm" ]
@@ -588,7 +597,7 @@ cli status | grep -q running
 # Updates use the configured repository only and install atomically with a previous copy.
 mkdir -p "$ZM_TEST_ROOT/usr/bin"
 cp "$work/standalone.sh" "$ZM_TEST_ROOT/usr/bin/jzm"
-sed 's/0\.1\.0/0.2.0/g' "$work/standalone.sh" > "$ZM_TEST_ROOT/manager-release"
+sed 's/0\.1\.[0-9][0-9]*/0.2.0/g' "$work/standalone.sh" > "$ZM_TEST_ROOT/manager-release"
 ucode -S -D "source=$work/manager.json" -D "target=$work/update-config.json" -e '
     import * as fs from "fs";
     let c = json(fs.readfile(source));

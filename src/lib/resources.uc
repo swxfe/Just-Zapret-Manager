@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.1';
 
 // The bundler replaces these accessors with references to generated constants.
 export function embedded_data() { return null; };
