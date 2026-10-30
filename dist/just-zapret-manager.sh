@@ -1,5 +1,5 @@
 #!/bin/sh
-# JZM_VERSION=0.1.1
+# JZM_VERSION=0.1.2
 # JZM_FORMAT=2
 # Generated from src/. This file contains readable shell and ucode source.
 set -eu
@@ -120,7 +120,8 @@ atomic_copy() (
     [ -n "$dir" ] || dir=/
     mkdir -p "$dir" || exit 1
     if [ "${ZM_ROLLBACK:-0}" != 1 ]; then check_space "$(file_kb "$src")" || exit 1; fi
-    case "$dest" in */etc/zapret-manager/update.json) tmp=$(mktemp "$dir/.update-XXXXXX.json") || exit 1;;
+    # BusyBox requires the six X characters at the end of the template.
+    case "$dest" in */etc/zapret-manager/update.json) tmp=$(mktemp "$dir/.update-XXXXXX") || exit 1;;
         *) tmp=$(mktemp "$dir/.zm-XXXXXX") || exit 1;; esac
     trap 'rm -f "$tmp"' 0
     trap 'exit 130' INT
@@ -2206,12 +2207,12 @@ https://redirector.googlevideo.com/report_mapping
 https://discord.com/
 `;
 EMBEDDED_DATA['strategies.txt'] = EMBEDDED_STRATEGIES;
-const EMBEDDED_HEADER = "#!/bin/sh\n# JZM_VERSION=0.1.1\n# JZM_FORMAT=2\n# Generated from src/. This file contains readable shell and ucode source.\nset -eu\nJZM_PID=$$\nexport JZM_PID\ncommand -v ucode >/dev/null 2>&1 || {\n    printf '%s\\n' 'jzm: требуется ucode и пакет ucode-mod-fs' >&2\n    exit 127\n}\n[ \"${JZM_MODE:-}\" = command ] || [ \"$#\" -eq 0 ] || {\n    printf '%s\\n' 'Запустите менеджер без аргументов: jzm' >&2\n    exit 2\n}\n";
+const EMBEDDED_HEADER = "#!/bin/sh\n# JZM_VERSION=0.1.2\n# JZM_FORMAT=2\n# Generated from src/. This file contains readable shell and ucode source.\nset -eu\nJZM_PID=$$\nexport JZM_PID\ncommand -v ucode >/dev/null 2>&1 || {\n    printf '%s\\n' 'jzm: требуется ucode и пакет ucode-mod-fs' >&2\n    exit 127\n}\n[ \"${JZM_MODE:-}\" = command ] || [ \"$#\" -eq 0 ] || {\n    printf '%s\\n' 'Запустите менеджер без аргументов: jzm' >&2\n    exit 2\n}\n";
 const EMBEDDED_FOOTER = "# Source is compiled in memory. Separate environment values stay below Linux's\n# per-argument limit; stdin remains available to the terminal menu and blockcheck.\n# This value is ucode source passed as one interpreter argument.\n# shellcheck disable=SC2089\nJZM_BOOTSTRAP='let source = \"\"; for (let i = 1; i <= +getenv(\"JZM_PARTS\"); i++) source += getenv(\"JZM_UCODE_\" + i) + \"\\n\"; loadstring(source, { strict_declarations: true })();'\nZM_HOME=${ZM_HOME:-/}\n# shellcheck disable=SC2090\nexport JZM_BOOTSTRAP ZM_HOME\nexec ucode -S -e \"$JZM_BOOTSTRAP\" -- \"$@\"\n";
 
 // ---- src/lib/resources.uc ----
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 
 // The bundler replaces these accessors with references to generated constants.
 function embedded_data() { return EMBEDDED_DATA; };

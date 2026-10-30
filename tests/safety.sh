@@ -4,10 +4,11 @@ cd "$(dirname "$0")/.."
 ZM_HOME=$(pwd -P)
 JZM_REAL_UCODE=$(command -v ucode)
 JZM_REAL_MV=$(command -v mv)
+JZM_REAL_MKTEMP=$(command -v mktemp)
 sandbox=$(mktemp -d /tmp/jzm-safety-XXXXXX)
 trap 'rm -rf -- "$sandbox"' 0
 ZM_TEST_ROOT=$sandbox/router
-export ZM_HOME ZM_TEST_ROOT JZM_REAL_UCODE JZM_REAL_MV
+export ZM_HOME ZM_TEST_ROOT JZM_REAL_UCODE JZM_REAL_MV JZM_REAL_MKTEMP
 unset ZM_TRANSACTION JZM_BOOTSTRAP JZM_BACKEND
 mkdir -p "$sandbox/bin" "$ZM_TEST_ROOT/etc/config" "$ZM_TEST_ROOT/etc/init.d" "$ZM_TEST_ROOT/tmp" "$ZM_TEST_ROOT/usr/bin"
 cp tests/mock-init.sh "$ZM_TEST_ROOT/etc/init.d/zapret"
@@ -31,6 +32,14 @@ for arg do
 done
 exec "$JZM_REAL_MV" "$@"
 EOF
+cat > "$sandbox/bin/mktemp" <<'EOF'
+#!/bin/sh
+set -eu
+template=''
+for argument do template=$argument; done
+case "$template" in *XXXXXX) ;; *) printf 'mktemp: invalid BusyBox template: %s\n' "$template" >&2; exit 1;; esac
+exec "$JZM_REAL_MKTEMP" "$@"
+EOF
 cat > "$sandbox/bin/ucode" <<'EOF'
 #!/bin/sh
 set -eu
@@ -45,9 +54,10 @@ manager-abort)
     backend manager-install "$ZM_TEST_ROOT"
     backend manager-config-init "$ZM_TEST_ROOT"
     exit 73;;
-update-abort)
+update-abort|update-commit)
     backend state-write update.json
-    exit 73;;
+    [ "$JZM_SAFETY_STEP" != update-abort ] || exit 73
+    exit 0;;
 update-signal)
     backend state-write update.json
     : > "$ZM_TEST_ROOT/update-published"
@@ -126,7 +136,10 @@ while [ ! -e "$ZM_TEST_ROOT/update-published" ] && [ "$attempt" -lt 100 ]; do sl
 kill -TERM "$(cat "$ZM_TEST_ROOT/tmp/zapret-manager.zapret.lock/pid")"
 if wait "$job"; then printf 'interrupted update succeeded\n' >&2; exit 1; fi
 cmp "$sandbox/update.before" "$ZM_TEST_ROOT/etc/zapret-manager/update.json"
-for temporary in "$ZM_TEST_ROOT/etc/zapret-manager/".update-*.json; do [ ! -e "$temporary" ]; done
+for temporary in "$ZM_TEST_ROOT/etc/zapret-manager/".update-*; do [ ! -e "$temporary" ]; done
+JZM_SAFETY_STEP=update-commit txn
+cmp "$JZM_SAFETY_INPUT" "$ZM_TEST_ROOT/etc/zapret-manager/update.json"
+for temporary in "$ZM_TEST_ROOT/etc/zapret-manager/".update-*; do [ ! -e "$temporary" ]; done
 backend backup-write "$JZM_SAFETY_INPUT" "$ZM_TEST_ROOT/etc/zapret-manager/backups/backup.json"
 [ -s "$ZM_TEST_ROOT/etc/zapret-manager/backups/backup.json" ]
 bad backend backup-write "$JZM_SAFETY_INPUT" "$sandbox/outside.json"

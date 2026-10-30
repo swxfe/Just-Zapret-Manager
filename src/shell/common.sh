@@ -105,7 +105,8 @@ atomic_copy() (
     [ -n "$dir" ] || dir=/
     mkdir -p "$dir" || exit 1
     if [ "${ZM_ROLLBACK:-0}" != 1 ]; then check_space "$(file_kb "$src")" || exit 1; fi
-    case "$dest" in */etc/zapret-manager/update.json) tmp=$(mktemp "$dir/.update-XXXXXX.json") || exit 1;;
+    # BusyBox requires the six X characters at the end of the template.
+    case "$dest" in */etc/zapret-manager/update.json) tmp=$(mktemp "$dir/.update-XXXXXX") || exit 1;;
         *) tmp=$(mktemp "$dir/.zm-XXXXXX") || exit 1;; esac
     trap 'rm -f "$tmp"' 0
     trap 'exit 130' INT
