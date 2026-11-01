@@ -29,6 +29,19 @@ reset_config() {
     [ -n "${ZM_TRANSACTION:-}" ] && [ "$ZM_TRANSACTION" = "$lock" ] || fail 'нет активной транзакции'
     if [ -f "$lock/0" ]; then atomic_copy "$lock/0" "$config"; else rm -f "$config"; fi
 }
+cleanup_staged() {
+    [ -f "$lock/staged.paths" ] || return 0
+    while IFS= read -r staged; do
+        case "$staged" in *"/../"*|*"/./"*) return 1;; esac
+        case "${staged##*/}" in .zm-*) ;; *) return 1;; esac
+        case "$staged" in
+            "$root/etc/zapret-manager/"*|"$base/"*|"$root/tmp/"*|            "$root/etc/config/.zm-"*|"$root/etc/crontabs/.zm-"*|"$root/usr/bin/.zm-"*) ;;
+            *) return 1;;
+        esac
+        rm -f -- "$staged" || return 1
+    done < "$lock/staged.paths"
+    rm -f "$lock/staged.paths"
+}
 reset_all() {
     ZM_ROLLBACK=1
     export ZM_ROLLBACK
@@ -78,6 +91,30 @@ $path
         fi
         case "$idx:$different" in 0:1|1:1|2:1|3:1|6:1|7:1|10:1|11:1|17:1) runtime_changed=1;; esac
     done
+    if [ -f "$lock/native.paths" ]; then
+        index=0
+        while IFS= read -r path; do
+            case "$path" in "$root/etc/zapret-manager/"*|"$base/"*|"$root/tmp/"*) ;; *) return 1;; esac
+            case "$path" in *"/../"*|*"/./"*) return 1;; esac
+            if [ -f "$lock/native.$index" ]; then atomic_copy "$lock/native.$index" "$path" || return 1
+            elif [ -f "$lock/native.$index.absent" ]; then
+                is_backup=0 owned_backup=0
+                if [ -f "$lock/backup.links" ]; then
+                    while IFS= read -r backup; do
+                        IFS= read -r staged || return 1
+                        if [ "$backup" = "$path" ]; then
+                            is_backup=1
+                            # The retained staging hard link proves who published this inode.
+                            # A competing writer's file is never removed on failed publication.
+                            if [ "$staged" -ef "$path" ]; then owned_backup=1; fi
+                        fi
+                    done < "$lock/backup.links"
+                fi
+                if [ "$is_backup" = 0 ] || [ "$owned_backup" = 1 ]; then rm -f -- "$path" || return 1; fi
+            else return 1; fi
+            index=$((index + 1))
+        done < "$lock/native.paths"
+    fi
     if [ -f "$lock/firewall.restart" ]; then "$root/etc/init.d/firewall" restart || return 1
     elif [ -f "$lock/firewall.touched" ]; then "$root/etc/init.d/firewall" reload || return 1; fi
     if [ -f "$lock/cron.before" ]; then
@@ -103,6 +140,7 @@ $path
     fi
     : > "$lock/changed"
     rm -f "$lock/service.touched"
+    cleanup_staged || return 1
     unset ZM_ROLLBACK
 }
 finish() {
@@ -115,6 +153,13 @@ finish() {
             printf 'zapret-manager: откат не завершён; резервная копия: %s\n' "$lock" >&2
             exit 1
         fi
+    fi
+    if [ "$rc" = 0 ] && [ "${JZM_REPORT_CHANGE:-0}" = 1 ] &&
+       { [ -s "$lock/changed" ] || [ -s "$lock/created_fakes" ] || [ -f "$lock/service.touched" ] ||
+         [ -f "$lock/firewall.touched" ] || [ -f "$lock/cron.before" ] || [ -f "$lock/cron.absent" ]; }; then rc=10; fi
+    if ! cleanup_staged; then
+        printf 'zapret-manager: не удалось очистить временные файлы; снимок: %s\n' "$lock" >&2
+        exit 1
     fi
     # Only this invocation's fixed lock directory is removed.
     case "$lock" in "$root/tmp/zapret-manager.$profile.lock") rm -rf -- "$lock";; esac
@@ -164,6 +209,44 @@ transaction|blockcheck)
     trap 'kill -TERM "$child" 2>/dev/null || :; wait "$child" 2>/dev/null || :; exit 130' INT
     trap 'kill -TERM "$child" 2>/dev/null || :; wait "$child" 2>/dev/null || :; exit 143' TERM HUP
     wait "$child"
+    ;;
+snapshot-uninstall)
+    require_root
+    [ "${ZM_TRANSACTION:-}" = "$lock" ] && [ -f "$lock/ready" ] || fail 'нет активной транзакции'
+    case "$1" in manager|all) mode=$1;; *) fail 'неверный режим снимка удаления';; esac
+    for tree in state zapret; do
+        [ "$tree" != zapret ] || [ "$mode" = all ] || continue
+        if [ "$tree" = state ]; then path=$root/etc/zapret-manager; else path=$base; fi
+        [ ! -L "$path" ] || fail "отказ удалять символическую ссылку: $path"
+        if [ -d "$path" ]; then cp -pR "$path" "$lock/uninstall-$tree"
+        else : > "$lock/uninstall-$tree.absent"; fi
+    done
+    : > "$lock/uninstall.ready"
+    ;;
+snapshot-path)
+    require_root
+    [ "${ZM_TRANSACTION:-}" = "$lock" ] && [ -f "$lock/ready" ] || fail 'нет активной транзакции'
+    path=$1
+    if [ "$path" = "$root/etc/crontabs/root" ]; then
+        if [ ! -f "$lock/cron.before" ] && [ ! -f "$lock/cron.absent" ]; then
+            if [ -f "$path" ]; then cp -p "$path" "$lock/cron.before"; else : > "$lock/cron.absent"; fi
+        fi
+        exit 0
+    fi
+    # Fixed entries were captured before the worker started. Snapshot other managed
+    # files once, including previously absent exports and user-created backups.
+    for idx in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do
+        managed_path "$idx"
+        [ "$path" != "$managed_file" ] || exit 0
+    done
+    case "$path" in "$root/etc/zapret-manager/"*|"$base/"*|"$root/tmp/"*) ;; *) fail 'путь вне разрешённых каталогов';; esac
+    case "$path" in *"/../"*|*"/./"*) fail 'неверный путь снимка';; esac
+    if [ -f "$lock/native.paths" ] && grep -Fxq -- "$path" "$lock/native.paths"; then exit 0; fi
+    index=0
+    if [ -f "$lock/native.paths" ]; then index=$(wc -l < "$lock/native.paths"); fi
+    if [ -f "$path" ]; then cp -p "$path" "$lock/native.$index"
+    else : > "$lock/native.$index.absent"; fi
+    printf '%s\n' "$path" >> "$lock/native.paths"
     ;;
 recover)
     require_root

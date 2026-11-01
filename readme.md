@@ -33,6 +33,18 @@ jzm
 Изменения конфигурации выполняются с резервным снимком и откатом при ошибке.
 Установка системных пакетов проходит отдельно: их базу менеджер назад не откатывает.
 
+Меню работает в одном процессе ucode: настройки читаются через `uci`, состояние procd —
+через `ubus`, SHA256 — через `digest`, HTTP/TLS — через `uclient` и `uloop`.
+Каталоги, пакетные версии и состояние конфигурации сохраняются в памяти сессии.
+Кэш сбрасывается после подтверждённого commit; отмена, ошибка и успешный откат его сохраняют.
+Проверка обновлений JZM запускается явно пунктом **«Проверить обновления менеджера»**.
+
+Нужны модули `ucode-mod-fs`, `ucode-mod-uci`, `ucode-mod-ubus`, `ucode-mod-digest`,
+`ucode-mod-uclient`, `ucode-mod-uloop` и CA bundle. Установщик проверяет весь набор.
+Независимый POSIX sh супервизор хранит снимки, обрабатывает сигналы, проверяет Flash
+и восстанавливает состояние при отказе worker. Штатные init/sync/blockcheck-скрипты Zapret
+остаются интерфейсом интеграции с самим пакетом.
+
 ## Разработка
 
 Стек: **ucode + POSIX sh**, сборка через **just**. Работайте в Linux или WSL2;
@@ -42,7 +54,7 @@ jzm
 git clone https://github.com/swxfe/just-zapret-manager.git
 cd just-zapret-manager
 sudo apt-get update
-sudo apt-get install -y git build-essential cmake ninja-build pkg-config libjson-c-dev libpcre2-dev shellcheck curl unzip python3 just
+sudo apt-get install -y git build-essential cmake ninja-build pkg-config libjson-c-dev libpcre2-dev libmd-dev libssl-dev shellcheck curl unzip python3 just
 sh tools/setup-dev.sh
 export PATH="$HOME/.local/share/jzm-dev/openwrt-25.12/bin:$PATH"
 just bundle
@@ -50,12 +62,12 @@ just bundle
 
 Если в вашем дистрибутиве нет пакета `just`, установите его по
 [официальной инструкции](https://just.systems/man/en/packages.html).
-`tools/setup-dev.sh` собирает закреплённые версии ucode и UCI локально в `~/.local/share/jzm-dev/`.
+`tools/setup-dev.sh` собирает закреплённые версии ucode, UCI, ubus и HTTP/TLS-библиотек локально в `~/.local/share/jzm-dev/`.
 
 | Команда | Результат |
 | --- | --- |
 | `just check` | Синтаксис shell, компиляция ucode и ShellCheck |
-| `just test` | Все локальные тесты и самопроверка обвязки эмулятора |
+| `just test` | Все локальные тесты, HTTP/TLS, проверка кэша и отсутствия fork в UI и самопроверка обвязки эмулятора |
 | `just bundle` | Тесты и сборка `dist/just-zapret-manager.sh` |
 | `just emulator-setup` | Загрузка эмулятора и подготовка OpenWrt |
 | `just test-e2e` | Сборка и полный прогон на виртуальном роутере |
@@ -69,7 +81,7 @@ just bundle
 src/       ucode-библиотеки, точка входа и shell-бэкенд
 data/      встроенные стратегии, списки и настройки
 tools/     сборка, установщик и инструменты разработки
-tests/     модульные, интеграционные и E2E-тесты
+tests/     наборы тестов, mocks/, setup/ и fixtures/ (см. tests/README.md)
 dist/      готовый читаемый скрипт для роутера
 ```
 

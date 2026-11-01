@@ -1,5 +1,6 @@
 import * as fs from 'fs';
-import { check, read, send, run, tempdir, invoke } from 'common';
+import { cached } from 'cache';
+import { check, read, send, invoke, output } from 'common';
 import { embedded_header, embedded_footer, embedded_config, VERSION } from 'resources';
 
 export function newer_version(candidate, current) {
@@ -50,25 +51,13 @@ function update_origin(ctx) {
 }
 
 function update_remote(ctx, url) {
-    // Every URL component is validated by settings(); no shell metacharacters are accepted.
     check(match(url, /^https:\/\/[A-Za-z0-9_.\/-]+$/), 'неверный URL обновления');
-    let cmd = "curl --fail --silent --show-error --location --max-redirs 3 --proto '=https' --proto-redir '=https'" +
-        ' --connect-timeout ' + ctx.connect_timeout + ' --max-time ' + ctx.request_timeout +
-        ' --max-filesize ' + ctx.max_file_bytes + " '" + url + "' 2>/dev/null";
-    let proc = fs.popen(cmd, 'r');
-    check(proc != null, 'не удалось запустить curl');
-    let body = '';
-    while (true) {
-        let chunk = proc.read(4096);
-        if (chunk == null || !length(chunk)) break;
-        body += chunk;
-        if (length(body) > ctx.max_file_bytes) { proc.close(); die('обновление слишком большое'); }
-    }
-    check(proc.close() == 0 && length(body), 'не удалось получить обновление');
+    let body = output(ctx, 'download', [ctx.connect_timeout, ctx.request_timeout, ctx.max_file_bytes, url]);
+    check(length(body), 'не удалось получить обновление');
     return body;
 }
 
-export function update_status(ctx) {
+function compute_update_status(ctx) {
     if (!length(ctx.updater.repo)) return { label: 'источник не настроен', available: false };
     let path = ctx.state + '/update.json';
     try {
@@ -79,6 +68,10 @@ export function update_status(ctx) {
         return data;
     }
     catch (e) { return { label: 'ещё не проверена', available: false }; }
+};
+
+export function update_status(ctx) {
+    return cached(ctx, 'update-status', () => compute_update_status(ctx));
 };
 
 export function check_update(ctx) {
@@ -105,30 +98,12 @@ export function cache_update(ctx, data) {
     send(ctx, 'state-write', ['update.json'], sprintf('%J\n', data));
 };
 
-export function start_update_check(ctx) {
-    if (!length(ctx.updater.repo) || ctx.root != '' || !getenv('JZM_BOOTSTRAP') || fs.stat('/usr/bin/jzm') == null) return;
-    let status = update_status(ctx);
-    if (status.checked != null && time() - status.checked < 21600) return;
-    let config = fs.stat(ctx.file) ? ['--config', ctx.file] : [];
-    system(['/bin/sh', '-c',
-        'JZM_BACKGROUND_UPDATE=1 JZM_MODE=command ucode -S -e "$JZM_BOOTSTRAP" -- "$@" </dev/null >/dev/null 2>&1 &',
-        'jzm-update', ...config, 'manager-check']);
-};
-
 export function apply_update(ctx) {
     if (!getenv('ZM_TRANSACTION')) { check(invoke(ctx, ['manager-update']) == 0, 'не удалось обновить менеджер'); return; }
     let info = update_status(ctx);
     check(info.available, 'новой версии нет; сначала проверьте обновления');
     let body = update_remote(ctx, 'https://raw.githubusercontent.com/' + ctx.updater.repo + '/' + info.revision + '/' + ctx.updater.path);
     check(index(body, '\n# JZM_VERSION=' + info.version + '\n') != -1 && match(body, /(^|\n)# JZM_FORMAT=2(\n|$)/), 'версия загруженного файла не совпала');
-    let dir = tempdir();
-    try {
-        let path = dir + '/jzm';
-        check(fs.writefile(path, body) == length(body), 'не удалось записать обновление');
-        run(ctx, 'manager-validate', [path]);
-        run(ctx, 'manager-install', [path, ctx.root]);
-    }
-    catch (e) { fs.unlink(dir + '/jzm'); fs.rmdir(dir); die(e.message); }
-    fs.unlink(dir + '/jzm'); fs.rmdir(dir);
+    send(ctx, 'manager-install', [ctx.root], body);
     printf('Менеджер обновлён до %s. Предыдущая сборка: /usr/bin/jzm.previous\nЗапустите jzm заново.\n', info.version);
 };

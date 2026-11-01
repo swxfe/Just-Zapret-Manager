@@ -1,3 +1,4 @@
+import { cached } from 'cache';
 import { resource } from 'resources';
 import * as fs from 'fs';
 import { check, read } from 'common';
@@ -22,26 +23,31 @@ export function legacy_addresses(body) {
     return values;
 };
 
-export function legacy_exclusions(ctx) {
+function compute_legacy_exclusions(ctx) {
     let path = ctx.base + '/init.d/openwrt/custom.d/20-script.sh';
     return fs.stat(path) ? legacy_addresses(read(path, 16384)) : null;
 };
 
-export function excluded(ctx) {
-    let path = ctx.state + '/devices.txt', result = legacy_exclusions(ctx) || [];
+export function legacy_exclusions(ctx) { return cached(ctx, 'legacy-devices', () => compute_legacy_exclusions(ctx)); };
+
+function compute_excluded(ctx) {
+    let path = ctx.state + '/devices.txt', result = [...(legacy_exclusions(ctx) || [])], seen = {};
+    for (let ip in result) seen[ip] = true;
     let body = fs.stat(path) ? read(path, 16384) : '';
     for (let line in split(body, '\n')) {
         line = trim(line);
         if (length(line)) {
             let ip = ipv4(line);
-            if (index(result, ip) == -1) push(result, ip);
+            if (!seen[ip]) { seen[ip] = true; push(result, ip); }
         }
     }
     check(length(result) <= 256, 'слишком много исключённых устройств');
     return result;
 };
 
-export function device_list(ctx) {
+export function excluded(ctx) { return cached(ctx, 'devices', () => compute_excluded(ctx)); };
+
+function compute_device_list(ctx) {
     let items = {}, path = ctx.root + '/tmp/dhcp.leases';
     if (fs.stat(path)) {
         for (let line in split(read(path, ctx.max_file_bytes), '\n')) {
@@ -57,6 +63,8 @@ export function device_list(ctx) {
     for (let ip in excluded(ctx)) if (!exists(items, ip)) items[ip] = { ip, name: 'вне DHCP / offline' };
     return map(sort(keys(items)), (ip) => items[ip]);
 };
+
+export function device_list(ctx) { return cached(ctx, 'device-list', () => compute_device_list(ctx)); };
 
 export function exclusion_hook(ctx, addresses) {
     let cfg = json(resource(ctx.home, 'network.json'));

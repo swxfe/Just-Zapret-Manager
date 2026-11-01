@@ -22,7 +22,12 @@ export function validate_list_snapshot(text, limit, max_bytes) {
 
 export function domains(text, limit) {
     let seen = {}, result = [], label_pattern = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-    for (let raw in split(text, '\n')) {
+    for (let offset = 0; offset < length(text);) {
+        // A DNS line is bounded before allocation; do not split a 50k-entry input.
+        let window = substr(text, offset, 1025), end = index(window, '\n');
+        check(end != -1 || length(window) <= 1024, 'слишком длинная строка доменного списка');
+        let raw = end == -1 ? window : substr(window, 0, end);
+        offset += end == -1 ? length(window) : end + 1;
         let name = lc(trim(split(raw, '#')[0]));
         if (!length(name)) continue;
         check(length(name) <= 253 && index(name, '.') != -1, 'неверный домен: ' + name);

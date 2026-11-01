@@ -1,77 +1,8 @@
 #!/bin/sh
 set -eu
-cd "$(dirname "$0")/.."
-ZM_HOME=$(pwd -P)
-JZM_REAL_UCODE=$(command -v ucode)
-JZM_REAL_MV=$(command -v mv)
-JZM_REAL_MKTEMP=$(command -v mktemp)
-sandbox=$(mktemp -d /tmp/jzm-safety-XXXXXX)
-trap 'rm -rf -- "$sandbox"' 0
-ZM_TEST_ROOT=$sandbox/router
-export ZM_HOME ZM_TEST_ROOT JZM_REAL_UCODE JZM_REAL_MV JZM_REAL_MKTEMP
-unset ZM_TRANSACTION JZM_BOOTSTRAP JZM_BACKEND
-mkdir -p "$sandbox/bin" "$ZM_TEST_ROOT/etc/config" "$ZM_TEST_ROOT/etc/init.d" "$ZM_TEST_ROOT/tmp" "$ZM_TEST_ROOT/usr/bin"
-cp tests/mock-init.sh "$ZM_TEST_ROOT/etc/init.d/zapret"
-chmod +x "$ZM_TEST_ROOT/etc/init.d/zapret"
-printf "config main 'main'\n\toption NFQWS_OPT '--filter-tcp=443'\n" > "$ZM_TEST_ROOT/etc/config/zapret"
-printf '#!/bin/sh\nprintf "0\\n"\n' > "$sandbox/bin/id"
-cat > "$sandbox/bin/df" <<'EOF'
-#!/bin/sh
-set -eu
-[ "${JZM_DF_FAIL:-0}" = 0 ] || exit 1
-printf '%s\n' "$*" >> "$ZM_TEST_ROOT/df.calls"
-printf 'Filesystem 1K-blocks Used Available Use%% Mounted\nfixture 999999 0 %s 0%% /\n' "${JZM_FREE_KB:-999999}"
-EOF
-cat > "$sandbox/bin/mv" <<'EOF'
-#!/bin/sh
-set -eu
-for arg do
-    case "$arg" in */etc/zapret-manager/update.json)
-        if [ -f "$ZM_TEST_ROOT/fail-update-write" ]; then rm -f "$ZM_TEST_ROOT/fail-update-write"; exit 91; fi;;
-    esac
-done
-exec "$JZM_REAL_MV" "$@"
-EOF
-cat > "$sandbox/bin/mktemp" <<'EOF'
-#!/bin/sh
-set -eu
-template=''
-for argument do template=$argument; done
-case "$template" in *XXXXXX) ;; *) printf 'mktemp: invalid BusyBox template: %s\n' "$template" >&2; exit 1;; esac
-exec "$JZM_REAL_MKTEMP" "$@"
-EOF
-cat > "$sandbox/bin/ucode" <<'EOF'
-#!/bin/sh
-set -eu
-backend() { /bin/sh "$ZM_HOME/src/shell/backend.sh" "$1" "$ZM_TEST_ROOT" zapret "$JZM_SAFETY_INPUT" "${2:-}"; }
-case "${JZM_SAFETY_STEP:-}" in
-asset-abort|asset-commit|asset-reset)
-    backend resource-write test.bin
-    if [ "$JZM_SAFETY_STEP" = asset-reset ]; then /bin/sh "$ZM_HOME/src/shell/backend.sh" reset "$ZM_TEST_ROOT" zapret; fi
-    [ "$JZM_SAFETY_STEP" != asset-abort ] || exit 73
-    exit 0;;
-manager-abort)
-    backend manager-install "$ZM_TEST_ROOT"
-    backend manager-config-init "$ZM_TEST_ROOT"
-    exit 73;;
-update-abort|update-commit)
-    backend state-write update.json
-    [ "$JZM_SAFETY_STEP" != update-abort ] || exit 73
-    exit 0;;
-update-signal)
-    backend state-write update.json
-    : > "$ZM_TEST_ROOT/update-published"
-    sleep 2
-    exit 0;;
-esac
-exec "$JZM_REAL_UCODE" "$@"
-EOF
-chmod +x "$sandbox/bin/"*
-PATH=$sandbox/bin:$PATH
-export PATH
-bad() { if "$@" > "$sandbox/error" 2>&1; then printf 'expected failure: %s\n' "$*" >&2; exit 1; fi; }
-backend() { sh src/shell/backend.sh "$1" "$ZM_TEST_ROOT" zapret "${2:-}" "${3:-}"; }
-txn() { sh src/shell/transaction.sh transaction "$ZM_TEST_ROOT" zapret version; }
+cd "$(dirname "$0")/../.."
+. tests/setup/safety.sh
+
 export JZM_FREE_KB=5119
 bad backend check-space 0
 export JZM_FREE_KB=5120
@@ -89,6 +20,12 @@ export JZM_FREE_KB=999999
 JZM_SAFETY_INPUT=$sandbox/payload
 export JZM_SAFETY_INPUT
 printf 'FAKE\n' > "$JZM_SAFETY_INPUT"
+JZM_SAFETY_STEP=dynamic-abort bad txn
+[ ! -e "$ZM_TEST_ROOT/etc/zapret-manager/exported.txt" ]
+printf 'original export\n' > "$ZM_TEST_ROOT/etc/zapret-manager/exported.txt"
+cp -p "$ZM_TEST_ROOT/etc/zapret-manager/exported.txt" "$sandbox/export.before"
+JZM_SAFETY_STEP=dynamic-abort bad txn
+cmp "$sandbox/export.before" "$ZM_TEST_ROOT/etc/zapret-manager/exported.txt"
 JZM_SAFETY_STEP=asset-abort bad txn
 [ ! -e "$ZM_TEST_ROOT/opt/zapret/files/fake/test.bin" ]
 JZM_SAFETY_STEP=asset-reset txn
@@ -163,20 +100,7 @@ cmp "$JZM_SAFETY_INPUT" "$hook"
 '
 mkdir -p "$ZM_TEST_ROOT/usr/lib/opkg"
 printf 'Package: zapret\nVersion: 71\nStatus: install ok installed\n' > "$ZM_TEST_ROOT/usr/lib/opkg/status"
-cat > "$sandbox/package-backend" <<'EOF'
-#!/bin/sh
-set -eu
-case "$1" in
-package)
-    [ -z "${ZM_TRANSACTION:-}" ] && [ ! -d "$ZM_TEST_ROOT/tmp/zapret-manager.zapret.lock" ] || exit 81
-    printf 'Package: zapret\nVersion: 72\nStatus: install ok installed\n' > "$ZM_TEST_ROOT/usr/lib/opkg/status"
-    printf "config main 'main'\n\toption NFQWS_OPT '--filter-tcp=444'\n" > "$ZM_TEST_ROOT/etc/config/zapret"
-    cp "$ZM_TEST_ROOT/etc/config/zapret" "$ZM_TEST_ROOT/package-config.before"
-    : > "$ZM_TEST_ROOT/package-complete";;
-transaction) [ -e "$ZM_TEST_ROOT/package-complete" ] || exit 82
-    exec /bin/sh "$ZM_HOME/src/shell/backend.sh" "$@";;
-*) exec /bin/sh "$ZM_HOME/src/shell/backend.sh" "$@";; esac
-EOF
+cp tests/mocks/safety/package-backend.sh "$sandbox/package-backend"
 JZM_SAFETY_BACKEND=$sandbox/package-backend
 export JZM_SAFETY_BACKEND
 JZM_BACKEND=$(cat <<'EOF'
@@ -190,7 +114,7 @@ cmp "$ZM_TEST_ROOT/package-config.before" "$ZM_TEST_ROOT/etc/config/zapret"
 grep -q 'Version: 72' "$ZM_TEST_ROOT/usr/lib/opkg/status"
 [ ! -d "$ZM_TEST_ROOT/tmp/zapret-manager.zapret.lock" ]
 unset JZM_BACKEND
-cp tests/mock-firewall.sh "$ZM_TEST_ROOT/etc/init.d/firewall"
+cp tests/mocks/firewall.sh "$ZM_TEST_ROOT/etc/init.d/firewall"
 chmod +x "$ZM_TEST_ROOT/etc/init.d/firewall"
 printf "config defaults\n\toption flow_offloading '0'\n\toption flow_offloading_hw '0'\n" > "$ZM_TEST_ROOT/etc/config/firewall"
 network() { JZM_MODE='command' sh src/launcher.sh --config "$sandbox/manager.json" network "$@"; }

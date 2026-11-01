@@ -9,7 +9,6 @@ check:
 # 2. Модульные, интеграционные тесты и проверка обвязки эмулятора
 test: check
     sh tests/run.sh
-    sh tests/e2e-emulator.sh selftest
 
 # 3. Сборка готового dist/just-zapret-manager.sh (после успешных тестов)
 bundle: test
@@ -17,8 +16,8 @@ bundle: test
 
 # 4. Скачать QEMU и сгенерировать чистый образ OpenWrt под Cudy WR3000P
 emulator-setup:
-    sh tests/e2e-emulator.sh setup
+    sh tests/e2e/run.sh setup
 
 # 5. Собрать бандл и запустить полный E2E-тест в QEMU
 test-e2e: bundle
-    sh tests/e2e-emulator.sh
+    sh tests/e2e/run.sh

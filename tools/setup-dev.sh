@@ -19,8 +19,11 @@ for tool in git cmake ninja pkg-config cc; do
 done
 prefix=$sdk/$variant
 mkdir -p "$prefix" "$sdk/sources"
-for component in libubox uci ucode; do
+for component in libubox ubus uci ucode ustream-ssl uclient; do
     case "$component" in
+        ustream-ssl) repo=openwrt/ustream-ssl; rev=cea28c5bc43ae80c3531c98f4e4dc67b7dcf0ebb;;
+        uclient) repo=openwrt/uclient; rev=88ae8f208dd313f69e268234f7db55956aef1cb9;;
+        ubus) repo=openwrt/ubus; rev=db20eff5535fe3126c05dc0edc029caf0e82fe10;;
         libubox) repo=openwrt/libubox; rev=da2d205a5cf3e877c45a2eec488218cbaf452e7d;;
         uci) repo=openwrt/uci; rev=74f6277aabffc943d026f406df57c22595134c42;;
         ucode) repo=ucode-lang/ucode; rev=$revision;;
@@ -44,11 +47,11 @@ for component in libubox uci ucode; do
         fi
     fi
     build_dir=$source_dir/build-$variant-$(basename "$compiler")
-    cmake -S "$source_dir" -B "$build_dir" -G Ninja \
-        -DCMAKE_C_COMPILER="$compiler" \
+    PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" cmake -S "$source_dir" -B "$build_dir" -G Ninja \
+        -DCMAKE_C_COMPILER="$compiler" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_INSTALL_LIBDIR=lib \
         -DCMAKE_PREFIX_PATH="$prefix" -DCMAKE_INSTALL_RPATH="$prefix/lib" \
-        -DBUILD_LUA=OFF -DBUILD_EXAMPLES=OFF -DRESOLV_SUPPORT=OFF -DSOCKET_SUPPORT=OFF
+        -DOPENSSL=ON -DDIGEST_SUPPORT=ON -DUBUS_SUPPORT=ON -DBUILD_LUA=OFF -DBUILD_EXAMPLES=OFF -DRESOLV_SUPPORT=OFF -DSOCKET_SUPPORT=OFF
     cmake --build "$build_dir" --target install --parallel 2
 done
 printf '\nГотово: %s\nДобавьте %s/bin в PATH и выполните just bundle\n' "$variant" "$prefix"

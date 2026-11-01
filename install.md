@@ -24,7 +24,7 @@ jzm
 
 ## Ручная установка
 
-Если зависимости `ucode`, `ucode-mod-fs`, `uci`, `curl`, `ca-bundle` и `unzip` уже установлены:
+Если зависимости `ucode`, `ucode-mod-fs ucode-mod-uci ucode-mod-ubus ucode-mod-digest ucode-mod-uclient ucode-mod-uloop`, `uci`, `curl`, `ca-bundle` и `unzip` уже установлены:
 
 ```sh
 wget -O /tmp/just-zapret-manager.sh https://raw.githubusercontent.com/swxfe/just-zapret-manager/main/dist/just-zapret-manager.sh

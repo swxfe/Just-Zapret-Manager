@@ -1,7 +1,3 @@
-#!/bin/sh
-set -eu
-# Exercise terminal job control rather than approximating it with a stdin pipe.
-python3 - "$1" <<'PY'
 import os
 from pathlib import Path
 import pty
@@ -78,17 +74,8 @@ try:
                 flag(enabled, not running)
                 script.unlink(missing_ok=True)
                 if mode != 'missing':
-                    script.write_text('''#!/bin/sh
-set -eu
-[ ! -f "$ZM_TEST_ROOT/state" ]
-[ -t 0 ] && [ -t 1 ]
-trap 'exit 130' INT
-trap 'exit 143' TERM HUP
-printf 'changed by blockcheck\\n' > "$ZM_TEST_ROOT/etc/config/zapret"
-printf 'JZM_BLOCKCHECK_READY\\n'
-IFS= read -r answer
-[ "$answer" = ready ]
-''' + ('exit 23\n' if mode == 'failure' else 'exit 0\n'))
+                    script.write_text((home / 'tests/mocks/blockcheck.sh').read_text() +
+                                      ('exit 23\n' if mode == 'failure' else 'exit 0\n'))
                 session(entry, mode)
                 assert state.exists() == running, ('running state', entry, mode)
                 assert enabled.exists() == (not running), ('enabled state', entry, mode)
@@ -102,4 +89,3 @@ finally:
     flag(state, original[0])
     flag(enabled, original[1])
 print(f'blockcheck: {passed} foreground PTY and restoration checks passed')
-PY

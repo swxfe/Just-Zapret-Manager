@@ -1,7 +1,8 @@
+import { cached } from 'cache';
 import { resource } from 'resources';
 import { package_versions, release_plan } from 'status';
 import * as fs from 'fs';
-import { check, read, output, run, send, tempdir } from 'common';
+import { check, read, output, run, send } from 'common';
 import { catalog, parse_catalog, validate_body, strategy_key } from 'strategies';
 
 export function github_response(response) {
@@ -153,15 +154,16 @@ export function source_data(ctx, kind, wanted) {
     if (!fs.stat(file)) {
         check(kind == 'manager', 'сначала обновите каталог Flowseal в меню');
         let text = resource(ctx.home, 'strategies.txt');
-        return { catalog: text, strategies: parse_catalog(ctx, text, wanted), assets: {}, revision: 'встроенный' };
+        return { catalog: text, strategies: cached(ctx, 'builtin-presets:' + sprintf('%J', wanted), () => parse_catalog(ctx, text, wanted)), assets: {}, revision: 'встроенный' };
     }
-    let value = json(read(file, ctx.max_file_bytes));
+    let value = cached(ctx, 'source-document:' + file, () => json(read(file, ctx.max_file_bytes)));
     check(value.format == 1 && value.source == kind && type(value.revision) == 'string' &&
           length(value.revision) == 40 && match(value.revision, /^[a-f0-9]+$/) &&
           type(value.assets) == 'object', 'повреждён каталог источника');
     check(type(value.catalog) == 'string', 'повреждён текст каталога источника');
-    value.strategies = parse_catalog(ctx, value.catalog, wanted);
-    return value;
+    let strategies = cached(ctx, 'source-presets:' + kind + ':' + sprintf('%J', wanted),
+        () => parse_catalog(ctx, value.catalog, wanted));
+    return { ...value, strategies };
 };
 
 export function refresh_source(ctx, kind) {
@@ -210,15 +212,10 @@ export function prepare_assets(ctx, kind, body, prepared) {
         check(path != null, 'источник не содержит fake-файл: ' + local);
         if (kind == 'manager' && pinned == null) pinned = revision(ctx, repo);
         let rev = kind == 'manager' ? pinned : data.revision;
-        let dir = tempdir();
-        try {
-            run(ctx, 'check-space', [int((ctx.max_file_bytes + 1023) / 1024)]);
-            run(ctx, 'download', [dir + '/blob', ctx.connect_timeout, ctx.request_timeout,
-                ctx.max_file_bytes, raw_url(repo, rev, path)]);
-            run(ctx, 'resource-write', [dir + '/blob', local]);
-        }
-        catch (e) { fs.unlink(dir + '/blob'); fs.rmdir(dir); die(e.message); }
-        fs.unlink(dir + '/blob'); fs.rmdir(dir);
+        run(ctx, 'check-space', [int((ctx.max_file_bytes + 1023) / 1024)]);
+        let payload = output(ctx, 'download', [ctx.connect_timeout, ctx.request_timeout,
+            ctx.max_file_bytes, raw_url(repo, rev, path)]);
+        send(ctx, 'resource-bytes', [local], payload);
     }
 };
 

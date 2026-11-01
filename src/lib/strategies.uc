@@ -1,3 +1,4 @@
+import { cached } from 'cache';
 import { resource } from 'resources';
 import { check, read } from 'common';
 
@@ -107,7 +108,8 @@ export function label_strategy(name, body) {
 
 export function parse_catalog(ctx, text, wanted) {
     check(type(text) == 'string' && index(text, '\x00') == -1, 'неверный текст каталога');
-    let sections = split('\n' + text, /\n[ \t\r]*#/), result = [], seen = {};
+    let sections = split('\n' + text, /\n[ \t\r]*#/), result = [], seen = {}, wanted_index = {};
+    for (let name in (wanted || [])) wanted_index[name] = true;
     let name_pattern = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
     check(!length(trim(sections[0])), 'стрратегия без заголовка #имя');
     check(length(sections) > 1 && length(sections) - 1 <= ctx.max_strategies, 'лимит числа стратегий');
@@ -118,15 +120,17 @@ export function parse_catalog(ctx, text, wanted) {
         check(length(name) <= 64 && match(name, name_pattern), 'неверное имя стратегии: ' + name);
         check(!seen[name], 'повтор стратегии: ' + name);
         seen[name] = true;
-        if (wanted == null || index(wanted, strategy_key(name)) != -1)
+        if (wanted == null || wanted_index[strategy_key(name)] == true)
             push(result, { name, body: validate_body(end == -1 ? '' : substr(section, end + 1)) });
     }
     return result;
 };
 
 export function catalog(ctx, file, wanted) {
-    let text = file ? read(file, ctx.max_file_bytes) : resource(ctx.home, 'strategies.txt');
-    return parse_catalog(ctx, text, wanted);
+    return cached(ctx, 'catalog:' + sprintf('%J', [file, wanted]), () => {
+        let text = file ? read(file, ctx.max_file_bytes) : resource(ctx.home, 'strategies.txt');
+        return parse_catalog(ctx, text, wanted);
+    });
 };
 
 export function select_strategy(ctx, name, file) {
@@ -146,11 +150,11 @@ export function compose(ctx, names, file) {
     check(length(names) > 0, 'укажите имена стратегий');
     let seen = {};
     for (let name in names) { check(!seen[name], 'повтор стратегии: ' + name); seen[name] = true; }
-    let list = catalog(ctx, file, map(names, strategy_key));
+    let list = catalog(ctx, file, map(names, strategy_key)), by_name = {};
+    for (let strategy in list) by_name[strategy.name] = strategy;
     return compose_bodies(map(names, (name) => {
-        let found = filter(list, (s) => s.name == name);
-        check(length(found) == 1, 'стратегия не найдена: ' + name);
-        return label_strategy(name, found[0].body);
+        check(exists(by_name, name), 'стратегия не найдена: ' + name);
+        return label_strategy(name, by_name[name].body);
     }));
 };
 

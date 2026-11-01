@@ -168,6 +168,19 @@ reset_config() {
     [ -n "${ZM_TRANSACTION:-}" ] && [ "$ZM_TRANSACTION" = "$lock" ] || fail 'нет активной транзакции'
     if [ -f "$lock/0" ]; then atomic_copy "$lock/0" "$config"; else rm -f "$config"; fi
 }
+cleanup_staged() {
+    [ -f "$lock/staged.paths" ] || return 0
+    while IFS= read -r staged; do
+        case "$staged" in *"/../"*|*"/./"*) return 1;; esac
+        case "${staged##*/}" in .zm-*) ;; *) return 1;; esac
+        case "$staged" in
+            "$root/etc/zapret-manager/"*|"$base/"*|"$root/tmp/"*|            "$root/etc/config/.zm-"*|"$root/etc/crontabs/.zm-"*|"$root/usr/bin/.zm-"*) ;;
+            *) return 1;;
+        esac
+        rm -f -- "$staged" || return 1
+    done < "$lock/staged.paths"
+    rm -f "$lock/staged.paths"
+}
 reset_all() {
     ZM_ROLLBACK=1
     export ZM_ROLLBACK
@@ -217,6 +230,30 @@ $path
         fi
         case "$idx:$different" in 0:1|1:1|2:1|3:1|6:1|7:1|10:1|11:1|17:1) runtime_changed=1;; esac
     done
+    if [ -f "$lock/native.paths" ]; then
+        index=0
+        while IFS= read -r path; do
+            case "$path" in "$root/etc/zapret-manager/"*|"$base/"*|"$root/tmp/"*) ;; *) return 1;; esac
+            case "$path" in *"/../"*|*"/./"*) return 1;; esac
+            if [ -f "$lock/native.$index" ]; then atomic_copy "$lock/native.$index" "$path" || return 1
+            elif [ -f "$lock/native.$index.absent" ]; then
+                is_backup=0 owned_backup=0
+                if [ -f "$lock/backup.links" ]; then
+                    while IFS= read -r backup; do
+                        IFS= read -r staged || return 1
+                        if [ "$backup" = "$path" ]; then
+                            is_backup=1
+                            # The retained staging hard link proves who published this inode.
+                            # A competing writer's file is never removed on failed publication.
+                            if [ "$staged" -ef "$path" ]; then owned_backup=1; fi
+                        fi
+                    done < "$lock/backup.links"
+                fi
+                if [ "$is_backup" = 0 ] || [ "$owned_backup" = 1 ]; then rm -f -- "$path" || return 1; fi
+            else return 1; fi
+            index=$((index + 1))
+        done < "$lock/native.paths"
+    fi
     if [ -f "$lock/firewall.restart" ]; then "$root/etc/init.d/firewall" restart || return 1
     elif [ -f "$lock/firewall.touched" ]; then "$root/etc/init.d/firewall" reload || return 1; fi
     if [ -f "$lock/cron.before" ]; then
@@ -242,6 +279,7 @@ $path
     fi
     : > "$lock/changed"
     rm -f "$lock/service.touched"
+    cleanup_staged || return 1
     unset ZM_ROLLBACK
 }
 finish() {
@@ -254,6 +292,13 @@ finish() {
             printf 'zapret-manager: откат не завершён; резервная копия: %s\n' "$lock" >&2
             exit 1
         fi
+    fi
+    if [ "$rc" = 0 ] && [ "${JZM_REPORT_CHANGE:-0}" = 1 ] &&
+       { [ -s "$lock/changed" ] || [ -s "$lock/created_fakes" ] || [ -f "$lock/service.touched" ] ||
+         [ -f "$lock/firewall.touched" ] || [ -f "$lock/cron.before" ] || [ -f "$lock/cron.absent" ]; }; then rc=10; fi
+    if ! cleanup_staged; then
+        printf 'zapret-manager: не удалось очистить временные файлы; снимок: %s\n' "$lock" >&2
+        exit 1
     fi
     # Only this invocation's fixed lock directory is removed.
     case "$lock" in "$root/tmp/zapret-manager.$profile.lock") rm -rf -- "$lock";; esac
@@ -303,6 +348,44 @@ transaction|blockcheck)
     trap 'kill -TERM "$child" 2>/dev/null || :; wait "$child" 2>/dev/null || :; exit 130' INT
     trap 'kill -TERM "$child" 2>/dev/null || :; wait "$child" 2>/dev/null || :; exit 143' TERM HUP
     wait "$child"
+    ;;
+snapshot-uninstall)
+    require_root
+    [ "${ZM_TRANSACTION:-}" = "$lock" ] && [ -f "$lock/ready" ] || fail 'нет активной транзакции'
+    case "$1" in manager|all) mode=$1;; *) fail 'неверный режим снимка удаления';; esac
+    for tree in state zapret; do
+        [ "$tree" != zapret ] || [ "$mode" = all ] || continue
+        if [ "$tree" = state ]; then path=$root/etc/zapret-manager; else path=$base; fi
+        [ ! -L "$path" ] || fail "отказ удалять символическую ссылку: $path"
+        if [ -d "$path" ]; then cp -pR "$path" "$lock/uninstall-$tree"
+        else : > "$lock/uninstall-$tree.absent"; fi
+    done
+    : > "$lock/uninstall.ready"
+    ;;
+snapshot-path)
+    require_root
+    [ "${ZM_TRANSACTION:-}" = "$lock" ] && [ -f "$lock/ready" ] || fail 'нет активной транзакции'
+    path=$1
+    if [ "$path" = "$root/etc/crontabs/root" ]; then
+        if [ ! -f "$lock/cron.before" ] && [ ! -f "$lock/cron.absent" ]; then
+            if [ -f "$path" ]; then cp -p "$path" "$lock/cron.before"; else : > "$lock/cron.absent"; fi
+        fi
+        exit 0
+    fi
+    # Fixed entries were captured before the worker started. Snapshot other managed
+    # files once, including previously absent exports and user-created backups.
+    for idx in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do
+        managed_path "$idx"
+        [ "$path" != "$managed_file" ] || exit 0
+    done
+    case "$path" in "$root/etc/zapret-manager/"*|"$base/"*|"$root/tmp/"*) ;; *) fail 'путь вне разрешённых каталогов';; esac
+    case "$path" in *"/../"*|*"/./"*) fail 'неверный путь снимка';; esac
+    if [ -f "$lock/native.paths" ] && grep -Fxq -- "$path" "$lock/native.paths"; then exit 0; fi
+    index=0
+    if [ -f "$lock/native.paths" ]; then index=$(wc -l < "$lock/native.paths"); fi
+    if [ -f "$path" ]; then cp -p "$path" "$lock/native.$index"
+    else : > "$lock/native.$index.absent"; fi
+    printf '%s\n' "$path" >> "$lock/native.paths"
     ;;
 recover)
     require_root
@@ -498,405 +581,42 @@ esac
 
 }
 
-jzm_network() {
-
-case "$action" in
-network)
-    need uci
-    [ -f "$confdir/firewall" ] && [ -x "$root/etc/init.d/firewall" ] || fail 'firewall OpenWrt не найден'
-    uci_cmd -q get 'firewall.@defaults[0]' >/dev/null || fail 'не найдена основная секция firewall'
-    if [ "$1" = status ]; then
-        printf 'Программный Flow Offloading: %s\n' "$(uci_cmd -q get 'firewall.@defaults[0].flow_offloading' || printf 0)"
-        printf 'Аппаратный Flow Offloading: %s\n' "$(uci_cmd -q get 'firewall.@defaults[0].flow_offloading_hw' || printf 0)"
-        if [ "$(uci_cmd -q get firewall.jzm_quic.name || :)" = JZM_Block_QUIC ]; then printf 'QUIC: заблокирован JZM\n'; else printf 'QUIC: JZM не блокирует\n'; fi
-        exit 0
-    fi
-    require_root
-    [ "${ZM_TRANSACTION:-}" = "$lock" ] || fail 'нет активной транзакции'
-    : > "$lock/firewall.touched"
-    case "$1:${2:-}" in
-    offload:disable)
-        saved=$root/etc/zapret-manager/offload.previous
-        if [ ! -f "$saved" ]; then
-            printf '%s\n%s\n' "$(uci_cmd -q get 'firewall.@defaults[0].flow_offloading' || printf x)" \
-                "$(uci_cmd -q get 'firewall.@defaults[0].flow_offloading_hw' || printf x)" > "$lock/offload.values"
-            atomic_copy "$lock/offload.values" "$saved"
-        fi
-        if [ "$(uci_cmd -q get 'firewall.@defaults[0].flow_offloading' || printf x)" != 0 ] ||
-            [ "$(uci_cmd -q get 'firewall.@defaults[0].flow_offloading_hw' || printf x)" != 0 ]; then
-            : > "$lock/firewall.restart"
-        fi
-        uci_cmd set 'firewall.@defaults[0].flow_offloading=0'
-        uci_cmd set 'firewall.@defaults[0].flow_offloading_hw=0'
-        ;;
-    offload:restore)
-        saved=$root/etc/zapret-manager/offload.previous
-        [ -f "$saved" ] || fail 'сохранённых параметров Flow Offloading нет'
-        sw=$(sed -n '1p' "$saved"); hw=$(sed -n '2p' "$saved")
-        for value in "$sw" "$hw"; do case "$value" in 0|1|x) ;; *) fail 'повреждены сохранённые параметры';; esac; done
-        if [ "$(uci_cmd -q get 'firewall.@defaults[0].flow_offloading' || printf x)" != "$sw" ] ||
-            [ "$(uci_cmd -q get 'firewall.@defaults[0].flow_offloading_hw' || printf x)" != "$hw" ]; then
-            : > "$lock/firewall.restart"
-        fi
-        if [ "$sw" = x ]; then uci_cmd -q delete 'firewall.@defaults[0].flow_offloading' || :
-        else uci_cmd set "firewall.@defaults[0].flow_offloading=$sw"; fi
-        if [ "$hw" = x ]; then uci_cmd -q delete 'firewall.@defaults[0].flow_offloading_hw' || :
-        else uci_cmd set "firewall.@defaults[0].flow_offloading_hw=$hw"; fi
-        mark_changed "$saved"
-        rm -f "$saved"
-        ;;
-    quic:on|quic:off)
-        existing=$(uci_cmd -q get firewall.jzm_quic.name || :)
-        [ -z "$existing" ] || [ "$existing" = JZM_Block_QUIC ] || fail 'имя правила jzm_quic уже занято'
-        if [ "$2" = off ]; then uci_cmd -q delete firewall.jzm_quic || :
-        else
-            uci_cmd set firewall.jzm_quic=rule
-            uci_cmd set firewall.jzm_quic.name=JZM_Block_QUIC
-            uci_cmd set firewall.jzm_quic.src=lan
-            uci_cmd set firewall.jzm_quic.dest=wan
-            uci_cmd set firewall.jzm_quic.proto=udp
-            uci_cmd set 'firewall.jzm_quic.dest_port=80 443'
-            uci_cmd set firewall.jzm_quic.target=REJECT
-            uci_cmd set firewall.jzm_quic.family=any
-        fi
-        ;;
-    *) fail 'неверная настройка совместимости';;
-    esac
-    mark_changed "$confdir/firewall"
-    uci_cmd commit firewall
-    if [ -f "$lock/firewall.restart" ]; then "$root/etc/init.d/firewall" restart
-    else "$root/etc/init.d/firewall" reload; fi
-    ;;
-*) fail 'неизвестная операция сети';;
-esac
-
-}
-
-jzm_uninstall() {
-
-require_root
-[ "${ZM_TRANSACTION:-}" = "$lock" ] || fail 'нет активной транзакции удаления'
-case "${1:-}" in manager|all) mode=$1;; *) fail 'ожидается manager или all';; esac
-state=$root/etc/zapret-manager
-# Snapshot complete trees, including backups and downloaded catalogs, before deletion.
-for tree in state zapret; do
-    [ "$tree" != zapret ] || [ "$mode" = all ] || continue
-    if [ "$tree" = state ]; then path=$state; else path=$base; fi
-    [ ! -L "$path" ] || fail "отказ удалять символическую ссылку: $path"
-    if [ -d "$path" ]; then cp -pR "$path" "$lock/uninstall-$tree"
-    else : > "$lock/uninstall-$tree.absent"; fi
-done
-: > "$lock/uninstall.ready"
-
-saved=$state/offload.previous
-if [ -f "$saved" ]; then
-    sw=$(sed -n '1p' "$saved"); hw=$(sed -n '2p' "$saved")
-    for value in "$sw" "$hw"; do case "$value" in 0|1|x) ;; *) fail 'повреждены сохранённые параметры Flow Offloading';; esac; done
-    for option in flow_offloading flow_offloading_hw; do
-        if [ "$option" = flow_offloading ]; then value=$sw; else value=$hw; fi
-        current=$(uci_cmd -q get "firewall.@defaults[0].$option" || printf x)
-        [ "$current" = "$value" ] || : > "$lock/firewall.restart"
-        if [ "$value" = x ]; then uci_cmd -q delete "firewall.@defaults[0].$option" || :
-        else uci_cmd set "firewall.@defaults[0].$option=$value"; fi
-    done
-    : > "$lock/firewall.touched"
-fi
-if [ -f "$confdir/firewall" ] && [ "$(uci_cmd -q get firewall.jzm_quic.name || :)" = JZM_Block_QUIC ]; then
-    uci_cmd delete firewall.jzm_quic
-    : > "$lock/firewall.touched"
-fi
-if [ -f "$lock/firewall.touched" ]; then
-    mark_changed "$confdir/firewall"
-    uci_cmd commit firewall
-    if [ -f "$lock/firewall.restart" ]; then "$root/etc/init.d/firewall" restart
-    else "$root/etc/init.d/firewall" reload; fi
-fi
-
-cronfile=$root/etc/crontabs/root
-tag='# zapret-manager:zapret'
-if [ -f "$cronfile" ] && grep -q "$tag$" "$cronfile"; then
-    cp -p "$cronfile" "$lock/cron.before"
-    awk -v tag="$tag" 'length($0)<length(tag) || substr($0,length($0)-length(tag)+1)!=tag' "$cronfile" > "$lock/cron.after"
-    atomic_copy "$lock/cron.after" "$cronfile"
-    "$root/etc/init.d/cron" restart
-fi
-
-hook=$base/init.d/openwrt/custom.d/20-jzm-exclude.sh
-if [ "$mode" = manager ]; then
-    if [ -e "$hook" ] || [ -L "$hook" ]; then
-        mark_changed "$hook"
-        rm -f "$hook"
-        if [ -f "$state/legacy-exclusion-hook.sh" ]; then
-            legacy=$base/init.d/openwrt/custom.d/20-script.sh
-            [ ! -e "$legacy" ] || fail 'старый хук уже существует; удаление отменено'
-            atomic_copy "$state/legacy-exclusion-hook.sh" "$legacy"
-        fi
-        if [ -x "$init" ] && "$init" running >/dev/null 2>&1; then service restart; fi
-    fi
-else
-    mark_changed "$config"
-    rm -f "$config"
-    # Both paths are fixed whitelist roots; package removal has already succeeded.
-    rm -rf -- "$base"
-fi
-mark_changed "$root/usr/bin/jzm"
-mark_changed "$root/usr/bin/jzm.previous"
-rm -f "$root/usr/bin/jzm" "$root/usr/bin/jzm.previous"
-rm -rf -- "$state"
-
-}
-
 # ---- system operation dispatcher ----
 
 case "$action" in
-uninstall-cleanup)
-    jzm_uninstall "$@"
+transaction|recover|reset-config|reset|blockcheck|snapshot-path|snapshot-uninstall)
+    jzm_transaction "$@"
+    ;;
+package|release-install)
+    jzm_packages "$@"
     ;;
 check-space) check_space "$1";;
-manager-uninstall)
-    require_root
-    mark_changed "$root/usr/bin/jzm"
-    mark_changed "$root/usr/bin/jzm.previous"
-    rm -f "$root/usr/bin/jzm" "$root/usr/bin/jzm.previous"
-    ;;
 manager-validate)
     /bin/sh -n "$1"
     JZM_MODE='command' /bin/sh "$1" version
     ;;
-manager-install|manager-config-init)
+backup-publish)
     require_root
-    destination=$2
-    case "$destination" in ''|/*) ;; *) fail 'нужен абсолютный путь установки';; esac
-    case "/$destination/" in */../*|*/./*) fail 'неверный путь установки';; esac
-    if [ "$action" = manager-install ]; then
-        target=$destination/usr/bin/jzm
-        /bin/sh -n "$1" || fail 'ошибка синтаксиса обновления'
-        if [ -f "$target" ]; then atomic_copy "$target" "$target.previous" 755; fi
-        atomic_copy "$1" "$target" 755
-    else
-        target=$destination/etc/zapret-manager/manager-config.json
-        if [ ! -e "$target" ]; then atomic_copy "$1" "$target"; fi
-    fi
-    ;;
-network)
-    jzm_network "$@"
-    ;;
-architecture)
-    awk -F "'" '/^DISTRIB_ARCH=/{print $2; found=1; exit} END{if(!found)exit 1}' "$root/etc/openwrt_release" > "$1"
-    ;;
-status-read)
-    if [ ! -x "$init" ]; then printf 'missing\n' > "$1"
-    elif "$init" running >/dev/null 2>&1; then printf 'running\n' > "$1"
-    else printf 'stopped\n' > "$1"
-    fi
-    ;;
-source-write)
-    require_root
-    case "$2" in manager|flowseal) ;; *) fail 'неизвестный источник';; esac
-    atomic_copy "$1" "$root/etc/zapret-manager/$2.json"
-    ;;
-device-hook-write)
-    require_root
-    [ "$profile" = zapret ] || fail 'нужен профиль Zapret'
-    if [ "${2:-}" = migrate ]; then
-        legacy=$base/init.d/openwrt/custom.d/20-script.sh
-        saved=$root/etc/zapret-manager/legacy-exclusion-hook.sh
-        [ -e "$saved" ] || atomic_copy "$legacy" "$saved"
-        mark_changed "$legacy"
-        rm -f "$legacy"
-    fi
-    atomic_copy "$1" "$base/init.d/openwrt/custom.d/20-jzm-exclude.sh"
-    mark_changed "$base/init.d/openwrt/custom.d/20-jzm-exclude.sh"
-    chmod 755 "$base/init.d/openwrt/custom.d/20-jzm-exclude.sh"
-    ;;
-strategy-state-clear)
-    require_root
-    mark_changed "$root/etc/zapret-manager/state.json"
-    rm -f "$root/etc/zapret-manager/state.json"
-    ;;
-state-write)
-    require_root
-    case "$2" in ''|*[!A-Za-z0-9_.-]*|.*) fail 'неверное имя файла';; esac
-    atomic_copy "$1" "$root/etc/zapret-manager/$2"
-    ;;
-resource-write)
-    require_root
-    case "$2" in ''|*[!A-Za-z0-9_.-]*|.*) fail 'неверное имя ресурса';; esac
-    case "$2" in *.bin) ;; *) fail 'ожидается bin-ресурс';; esac
-    [ -s "$1" ] || fail 'пустой bin-ресурс'
-    [ "${ZM_TRANSACTION:-}" = "$lock" ] || fail 'нет активной транзакции для fake-файла'
-    if [ ! -e "$base/files/fake/$2" ]; then
-        check_space "$(file_kb "$1")"
-        printf '%s\n' "$2" >> "$lock/created_fakes"
-        atomic_copy "$1" "$base/files/fake/$2"
-    fi
-    ;;
-release-install)
-    jzm_packages "$@"
-    ;;
-transaction|recover|reset-config|reset|blockcheck)
-    jzm_transaction "$@"
-    ;;
-status)
-    if [ ! -x "$init" ]; then printf '%s: not installed\n' "$profile"
-    elif "$init" running >/dev/null 2>&1; then printf '%s: running\n' "$profile"
-    else printf '%s: stopped\n' "$profile"
-    fi
-    ;;
-doctor)
-    errors=0
-    for tool in ucode uci curl mktemp sha256sum; do
-        if command -v "$tool" >/dev/null 2>&1; then printf 'OK %s\n' "$tool"
-        else printf 'MISSING %s\n' "$tool"; errors=$((errors + 1))
-        fi
-    done
-    if ! command -v opkg >/dev/null 2>&1 && ! command -v apk >/dev/null 2>&1; then
-        printf '%s\n' 'MISSING opkg/apk'; errors=$((errors + 1))
-    fi
-    [ -f "$config" ] || { printf 'MISSING %s\n' "$config"; errors=$((errors + 1)); }
-    [ -x "$init" ] || { printf 'MISSING %s\n' "$init"; errors=$((errors + 1)); }
-    [ "$errors" -eq 0 ]
-    ;;
-service)
-    require_root
-    case "${1:-}" in start|stop|restart|enable|disable) service "$1";; *) fail 'неверное действие сервиса';; esac
-    ;;
-config-read|config-read-optional)
-    require_config
-    if [ "$action" = config-read-optional ]; then
-        uci_cmd -q get "$profile.$section" >/dev/null || fail 'основная секция конфига не найдена'
-        uci_cmd -q get "$profile.$section.$1" || :
-    else uci_cmd -q get "$profile.$section.$1"; fi
-    ;;
-config-get)
-    require_config
-    uci_cmd -q get "$profile.$section.$2" > "$1"
-    ;;
-config-get-optional)
-    require_config
-    uci_cmd -q get "$profile.$section" > /dev/null || fail 'основная секция конфига не найдена'
-    if ! uci_cmd -q get "$profile.$section.$2" > "$1"; then : > "$1"; fi
-    ;;
-config-set)
-    require_root; require_config
-    [ "$#" -gt 0 ] && [ "$(( $# % 2 ))" -eq 0 ] || fail 'нужны пары опция/значение'
-    key=1
-    for value do
-        if [ "$key" = 1 ]; then
-            case "$value" in *[!A-Za-z0-9_]*|'') fail 'неверное имя опции';; esac
-            key=0
-        else key=1; fi
-    done
-    while [ "$#" -gt 0 ]; do
-        uci_cmd set "$profile.$section.$1=$2"
-        shift 2
-    done
-    mark_changed "$config"
-    uci_cmd commit "$profile"
-    ;;
-config-restore)
-    require_root; need uci
-    # Parse in an isolated UCI directory before touching the active configuration.
-    stage=$(mktemp -d "$root/tmp/zm-uci-XXXXXX")
-    trap 'rm -rf -- "$stage"' 0
-    cp "$1" "$stage/$profile"
-    uci -c "$stage" -t "$stage/delta" show "$profile" >/dev/null || fail 'резервная копия содержит неверный UCI'
-    expected_type=main
-    [ "$(uci -c "$stage" -t "$stage/delta" -q get "$profile.$section")" = "$expected_type" ] || fail 'в резервной копии нет основной UCI-секции'
-    atomic_copy "$stage/$profile" "$config"
-    ;;
-hosts-read-stdout)
-    host_path "$1"
-    path=$host_file
-    if [ -f "$path" ]; then cat "$path"; fi
-    ;;
-hosts-read)
-    host_path "$2"
-    path=$host_file
-    if [ -f "$path" ]; then cat "$path" > "$1"; else : > "$1"; fi
-    ;;
-hosts-write)
-    require_root
-    host_path "$2"
-    atomic_copy "$1" "$host_file"
-    ;;
-backup-write)
-    require_root
-    [ ! -e "$2" ] || fail 'файл резервной копии уже существует'
+    [ "${ZM_TRANSACTION:-}" = "$lock" ] && [ -f "$lock/ready" ] || fail 'нет активной транзакции'
+    case "$2" in "$root/tmp/"*|"$root/etc/zapret-manager/backups/"*) ;; *) fail 'неверный путь резервной копии';; esac
     case "$2" in *[!A-Za-z0-9_./\ -]*|*/../*|*/./*) fail 'неверный путь резервной копии';; esac
-    case "$2" in "$root/tmp/"*|"$root/etc/zapret-manager/backups/"*) ;; *) fail 'копия разрешена только в backups/ или /tmp/';; esac
-    dir=$(dirname "$2")
-    mkdir -p "$dir"
+    [ -f "$1" ] && [ ! -L "$1" ] || fail 'неверный временный файл резервной копии'
+    dir=${2%/*}
+    [ "${1%/*}" = "$dir" ] || fail 'резервная копия должна публиковаться на той же файловой системе'
     physical=$(CDPATH='' cd -P "$dir" && pwd)
-    case "$physical/" in "$root/tmp/"*|"$root/etc/zapret-manager/backups/"*) ;; *) fail 'каталог копии выходит за разрешённые пути';; esac
-    tmp=$(mktemp "$dir/.zm-backup-XXXXXX")
-    trap 'rm -f "$tmp"' 0
-    cat "$1" > "$tmp"
-    # A hard link publishes the complete file and refuses to replace an existing backup.
-    ln "$tmp" "$2"
+    [ "$physical" = "$dir" ] || fail 'каталог копии выходит за разрешённый путь'
+    # link() is absent from stable ucode fs. This refuses to replace an existing backup.
+    ln "$1" "$2"
     ;;
-github-download)
-    need curl
-    case "$5" in https://api.github.com/*) ;; *) fail 'неверный адрес GitHub API';; esac
-    trap 'rm -f "$1.body" "$1.headers"' 0
-    trap 'exit 130' INT
-    trap 'exit 143' TERM HUP
-    # Keep HTTP error bodies: --fail would hide the API's explanation.
-    code=$(curl --silent --show-error --location --max-redirs 3 \
-        --proto '=https' --proto-redir '=https' --connect-timeout "$2" \
-        --max-time "$3" --max-filesize "$4" --output "$1.body" \
-        --dump-header "$1.headers" --write-out '%{http_code}' "$5")
-    remaining=$(awk '/^HTTP\// {value=""} tolower($1)=="x-ratelimit-remaining:" {value=$2; gsub(/\r/, "", value)} END {print value}' "$1.headers")
-    printf '%s\n%s\n' "$code" "$remaining" > "$1"
-    cat "$1.body" >> "$1"
-    ;;
-download)
-    need curl
-    curl --fail --silent --show-error --location --max-redirs 3 \
-        --proto '=https' --proto-redir '=https' --connect-timeout "$2" \
-        --max-time "$3" --max-filesize "$4" --output "$1" "$5"
-    ;;
-probe)
-    need curl
-    curl --fail --silent --show-error --location --max-redirs 3 \
-        --proto '=http,https' --proto-redir '=http,https' --connect-timeout "$1" \
-        --max-time "$2" --output /dev/null "$3"
-    ;;
-settle) sleep "$1";;
-package)
-    jzm_packages "$@"
-    ;;
-schedule)
-    require_root
-    settings=$1; shift
-    cronfile=$root/etc/crontabs/root
-    [ -x "$root/etc/init.d/cron" ] || fail 'не найден cron'
-    mkdir -p "$(dirname "$cronfile")"
-    tmp=$(mktemp "$root/tmp/zm-cron-XXXXXX")
-    trap 'rm -f "$tmp"' 0
-    tag="# zapret-manager:$profile"
-    if [ -f "$cronfile" ]; then
-        awk -v tag="$tag" 'length($0)<length(tag) || substr($0,length($0)-length(tag)+1)!=tag' "$cronfile" > "$tmp"
-    fi
-    if [ "$1" != off ]; then
-        hour=$1; targets=$2; strategies=$3
-        for path in "$settings" "$targets" "$strategies"; do
-            case "$path" in /*) ;; *) fail 'для расписания нужны абсолютные пути';; esac
-            case "$path" in *[!A-Za-z0-9_./-]*) fail 'пути cron: только буквы, цифры, / . _ -';; esac
-        done
-        printf '0 %s * * * JZM_MODE=command /bin/sh %s/usr/bin/jzm --config %s auto-best %s %s >%s/tmp/zapret-manager.log 2>&1 %s\n' \
-            "$hour" "$root" "$settings" "$targets" "$strategies" "$root" "$tag" >> "$tmp"
-    fi
-    if [ -f "$cronfile" ]; then cp -p "$cronfile" "$ZM_TRANSACTION/cron.before"; else : > "$ZM_TRANSACTION/cron.absent"; fi
-    atomic_copy "$tmp" "$cronfile"
-    if ! "$root/etc/init.d/cron" restart; then
-        if [ -f "$ZM_TRANSACTION/cron.before" ]; then atomic_copy "$ZM_TRANSACTION/cron.before" "$cronfile"
-        else rm -f "$cronfile"
-        fi
-        fail 'cron: ошибка перезапуска'
+*)
+    # Compatibility entry for internal atom calls; business logic lives in ucode.
+    # The ordinary UI/worker invokes that logic directly and never takes this path.
+    if [ -n "${JZM_BOOTSTRAP:-}" ]; then
+        JZM_NATIVE_ATOM=1 JZM_MODE=command exec ucode -S -e "$JZM_BOOTSTRAP" -- backend-operation "$action" "$root" "$profile" "$@"
+    else
+        JZM_NATIVE_ATOM=1 JZM_MODE=command exec ucode -S -L "$ZM_HOME/src/lib" -- "$ZM_HOME/src/main.uc" backend-operation "$action" "$root" "$profile" "$@"
     fi
     ;;
-*) fail "неизвестное действие backend: $action";;
 esac
 __JZM_JZM_BACKEND__
 )
@@ -904,6 +624,11 @@ export JZM_BACKEND
 
 JZM_UCODE_1=$(cat <<'__JZM_JZM_UCODE_1__'
 import * as fs from 'fs';
+import * as uci from 'uci';
+import * as ubus from 'ubus';
+import { sha256 } from 'digest';
+import * as uclient from 'uclient';
+import * as uloop from 'uloop';
 const EMBEDDED_STRATEGIES = `
 #v1
 --filter-tcp=443
@@ -1716,6 +1441,11 @@ steamcommunity.com
 counter-strike.net
 steamusercontent.com
 gstore.val.manlaxy.com
+__JZM_JZM_UCODE_1__
+)
+export JZM_UCODE_1
+
+JZM_UCODE_2=$(cat <<'__JZM_JZM_UCODE_2__'
 steam.cdn.orcon.net.nz
 steamdeckusercontent.com
 #################################### OpenWRT
@@ -1725,11 +1455,6 @@ github.com
 openwrt.org
 lede-project.org
 githubusercontent.com
-__JZM_JZM_UCODE_1__
-)
-export JZM_UCODE_1
-
-JZM_UCODE_2=$(cat <<'__JZM_JZM_UCODE_2__'
 #################################### UbisoftConnect
 ubi.com
 uplay.com
@@ -2212,6 +1937,8 @@ const EMBEDDED_FOOTER = "# Source is compiled in memory. Separate environment va
 
 // ---- src/lib/resources.uc ----
 
+let resource_cache = {};
+
 const VERSION = '0.1.2';
 
 // The bundler replaces these accessors with references to generated constants.
@@ -2226,9 +1953,570 @@ function resource(home, name) {
         if (!exists(data, name)) die('неизвестный встроенный ресурс: ' + name);
         return data[name];
     }
-    let body = fs.readfile(home + '/data/' + name);
+    let path = home + '/data/' + name;
+    if (exists(resource_cache, path)) return resource_cache[path];
+    let body = fs.readfile(path);
     if (body == null) die('не найден ресурс: ' + name);
+    if (length(resource_cache) >= 16) resource_cache = {};
+    resource_cache[path] = body;
     return body;
+};
+
+// ---- src/lib/cache.uc ----
+// Only an interactive session owns this cache; transaction workers read fresh state.
+function session_cache(ctx) {
+    ctx.cache = {};
+};
+
+function cached(ctx, key, obtain) {
+    if (ctx.cache == null) return obtain();
+    if (exists(ctx.cache, key)) return ctx.cache[key];
+    // User-selected catalogs and paths must not grow the session without a bound.
+    if (length(ctx.cache) >= 64) ctx.cache = {};
+    let value = obtain();
+    ctx.cache[key] = value;
+    return value;
+};
+
+function invalidate(ctx) {
+    if (ctx.cache != null) ctx.cache = {};
+};
+
+// ---- src/lib/platform.uc ----
+
+function config_cursor(ctx, writeable) {
+    // Ignore shared CLI deltas and runtime overrides; workers use their private delta directory.
+    let delta = writeable ? getenv('ZM_TRANSACTION') + '/delta' : '/dev/null';
+    let handle = uci.cursor(ctx.root + '/etc/config', delta, '', { strict: true, print_errors: false });
+    if (handle == null) die('не удалось создать UCI cursor: ' + uci.error());
+    return handle;
+};
+
+function config_values(ctx, package, section) {
+    return cached(ctx, 'uci:' + package + ':' + section, () => {
+        let st = fs.stat(ctx.root + '/etc/config/' + package);
+        if (st?.type != 'file' || st.size > ctx.max_file_bytes) die('неверный размер UCI: ' + package);
+        let handle = config_cursor(ctx, false);
+        if (!handle.load(package)) die('не удалось прочитать UCI ' + package + ': ' + uci.error());
+        let values = handle.get_all(package, section);
+        if (values == null) die('основная секция конфига не найдена: ' + package);
+        return values;
+    });
+};
+
+function config_option(ctx, key, optional) {
+    if (!match(key, /^[A-Za-z][A-Za-z0-9_]*$/)) die('неверное имя опции');
+    let value = config_values(ctx, 'zapret', '@main[0]')[key];
+    if (value == null) {
+        if (!optional) die('опция UCI не найдена: ' + key);
+        return '';
+    }
+    if (type(value) == 'array') value = join(' ', value);
+    if (type(value) != 'string' || length(value) > ctx.max_file_bytes || index(value, '\x00') != -1)
+        die('неверное значение UCI: ' + key);
+    return value + '\n';
+};
+
+function host_path(ctx, kind) {
+    let names = { user: 'zapret-hosts-user.txt', exclude: 'zapret-hosts-user-exclude.txt', google: 'zapret-hosts-google.txt' };
+    if (!exists(names, kind)) die('неизвестный список доменов');
+    return ctx.base + '/ipset/' + names[kind];
+};
+
+function native_running(ctx) {
+    // Off-root fixtures use their own bus, with precisely the same native RPC path.
+    let socket = ctx.root == '' ? null : ctx.root + '/tmp/ubus.sock';
+    let connection = ubus.connect(socket, 1);
+    if (connection == null) return null;
+    let reply;
+    try { reply = connection.call('service', 'list', { name: 'zapret' }); }
+    catch (e) { connection.disconnect(); return null; }
+    connection.disconnect();
+    return reply;
+};
+
+function executable(name) {
+    for (let directory in split(getenv('PATH') || '/usr/sbin:/usr/bin:/sbin:/bin', ':')) {
+        let path = (length(directory) ? directory : '.') + '/' + name;
+        if (fs.stat(path)?.type == 'file' && fs.access(path, 'x')) return path;
+    }
+    return null;
+};
+
+// ---- src/lib/http.uc ----
+
+let http_provider = null, http_provider_path = null;
+
+function http_valid_url(url, allow_http) {
+    return type(url) == 'string' && length(url) <= 4096 &&
+        match(url, allow_http ? /^https?:\/\/[^[:space:]]+$/ : /^https:\/\/[^[:space:]]+$/);
+}
+
+// The explicit provider is for the offline fault-injection harness. It is never
+// read from manager.json, remote catalogs or responses.
+function http_request(ctx, url, limit, allow_http, discard) {
+    if (!http_valid_url(url, allow_http)) die('неверный URL HTTP');
+    let provider = getenv('JZM_HTTP_PROVIDER');
+    if (provider != null) {
+        if (http_provider == null || http_provider_path != provider) {
+            http_provider = loadfile(provider, { strict_declarations: true })();
+            http_provider_path = provider;
+        }
+        let reply = http_provider.request(url, { limit, allow_http,
+            connect_timeout: ctx.connect_timeout, request_timeout: ctx.request_timeout });
+        if (type(reply) != 'object' || type(reply.body) != 'string' || length(reply.body) > limit ||
+            type(reply.status) != 'int' || reply.status < 100 || reply.status > 599 || type(reply.headers) != 'object')
+            die('неверный ответ HTTP provider');
+        return reply;
+    }
+    uloop.init();
+    let client = null, deadline = null, redirects = 0, total = 0;
+    let current = url, headers = {}, status = 0, chunks = [], problem = '', complete = false;
+    function stop(message) { problem = message; uloop.end(); }
+    function consume() {
+        // The oldest supported uclient uses a fixed 4096-byte C read buffer.
+        for (let chunk = client.read(4096); chunk != null && length(chunk); chunk = client.read(4096)) {
+            total += length(chunk);
+            if (total > limit) { stop('ответ HTTP превышает лимит размера'); return; }
+            if (!discard) push(chunks, chunk);
+        }
+    }
+    try {
+        client = uclient.new(url, null, {
+            header_done: () => {
+                let info = client.status();
+                status = info.status; headers = {};
+                for (let name, value in client.get_headers()) headers[lc(name)] = value;
+                if (!info.redirect) {
+                    let size = headers['content-length'];
+                    if (size != null && (!match(size, /^[0-9]+$/) || +size > limit)) stop('ответ HTTP превышает лимит размера');
+                    return;
+                }
+                let location = headers.location;
+                if (type(location) != 'string' || ++redirects > 3) { stop('слишком много перенаправлений HTTP'); return; }
+                if (substr(location, 0, 2) == '//') location = split(current, ':')[0] + ':' + location;
+                else if (substr(location, 0, 1) == '/') {
+                    let origin = match(current, /^(https?:\/\/[^/]+)/);
+                    location = origin[1] + location;
+                }
+                else if (!match(location, /^https?:\/\//)) {
+                    let origin = match(current, /^(https?:\/\/[^/]+)(\/.*)?$/);
+                    let path = split(origin[2] || '/', '?')[0];
+                    location = origin[1] + fs.dirname(path) + '/' + location;
+                }
+                if (!http_valid_url(location, allow_http) || (substr(current, 0, 6) == 'https:' && substr(location, 0, 6) != 'https:')) {
+                    stop('небезопасное перенаправление HTTP'); return;
+                }
+                current = location; chunks = []; total = 0;
+                if (!client.set_url(location) || !client.connect() ||
+                    !client.request('GET', { headers: { 'User-Agent': 'JZM', Accept: '*/*' } }))
+                    stop('ошибка перенаправления HTTP');
+            },
+            data_read: consume,
+            data_eof: () => { consume(); complete = client.status().data_eof == true; uloop.end(); },
+            error: (handle, code) => stop('ошибка HTTP transport: ' + code)
+        });
+        if (client == null) die('не удалось создать HTTP client');
+        let ca = getenv('SSL_CERT_FILE') || '/etc/ssl/certs/ca-certificates.crt';
+        if (!client.ssl_init({ verify: true, ca_files: [ca] }))
+            die('не удалось включить проверку сертификата HTTPS');
+        if (!client.set_timeout(ctx.connect_timeout * 1000)) die('не удалось задать таймаут HTTP');
+        deadline = uloop.timer(ctx.request_timeout * 1000, () => stop('истёк таймаут HTTP'));
+        if (!client.connect() || !client.request('GET', { headers: { 'User-Agent': 'JZM', Accept: '*/*' } }))
+            die('не удалось подключиться к HTTP server');
+        uloop.run();
+        deadline.cancel();
+        client.disconnect(); client.free(); client = null;
+        if (length(problem)) die(problem);
+        if (!complete || status < 100 || status > 599) die('неполный ответ HTTP');
+        return { status, headers, body: join('', chunks) };
+    }
+    catch (e) {
+        if (deadline != null) deadline.cancel();
+        if (client != null) { client.disconnect(); client.free(); }
+        die(e.message);
+    }
+};
+
+// ---- src/lib/mutations.uc ----
+
+function tx_check(ok, message) { if (!ok) die(message); }
+
+function tx_lock(ctx) {
+    let path = ctx.root + '/tmp/zapret-manager.zapret.lock';
+    tx_check(getenv('ZM_TRANSACTION') == path && fs.stat(path + '/ready')?.type == 'file', 'нет активной транзакции');
+    return path;
+}
+
+function tx_write(path, text) {
+    tx_check(fs.writefile(path, text) == length(text), 'ошибка записи: ' + path);
+}
+
+function tx_marker(ctx, name) { tx_write(tx_lock(ctx) + '/' + name, '1\n'); }
+
+function tx_append(path, text) {
+    let previous = fs.stat(path)?.size || 0;
+    let journal = fs.open(path, 'a');
+    tx_check(journal != null, 'не удалось открыть журнал: ' + path);
+    let count = journal.write(text);
+    journal.close();
+    tx_check(count == length(text) && fs.stat(path)?.size == previous + length(text), 'ошибка записи журнала: ' + path);
+}
+
+function tx_changed(ctx, path) {
+    tx_append(tx_lock(ctx) + '/changed', path + '\n');
+    invalidate(ctx);
+}
+
+function tx_directory(path) {
+    let st = fs.lstat(path);
+    if (st != null) { tx_check(st.type == 'directory', 'каталог заменён ссылкой или файлом: ' + path); return; }
+    tx_directory(fs.dirname(path));
+    tx_check(fs.mkdir(path, 0700), 'не удалось создать каталог: ' + path);
+}
+
+function tx_token() {
+    let token = trim(fs.readfile('/proc/sys/kernel/random/uuid', 64) || '');
+    tx_check(match(token, /^[a-f0-9-]{36}$/), 'не удалось получить случайное имя');
+    return token;
+}
+
+function tx_allowed(ctx, path) {
+    let prefix = ctx.state + '/', base = ctx.base + '/';
+    return (substr(path, 0, length(prefix)) == prefix && !match(substr(path, length(prefix)), /(^|\/)\.\.?(\/|$)/)) ||
+        path == ctx.config || path == ctx.base + '/config' ||
+        path == ctx.root + '/etc/config/firewall' || path == ctx.root + '/etc/crontabs/root' ||
+        path == ctx.root + '/usr/bin/jzm' || path == ctx.root + '/usr/bin/jzm.previous' ||
+        substr(path, 0, length(base)) == base || substr(path, 0, length(ctx.root + '/tmp/')) == ctx.root + '/tmp/';
+}
+
+function tx_same(path, body) {
+    let st = fs.lstat(path);
+    return st?.type == 'file' && st.size == length(body) && fs.readfile(path, st.size + 1) == body;
+}
+
+// Configuration payloads stay in this process. Only safety primitives absent from
+// stable fs (statvfs, link, timestamp-preserving snapshot) go to the supervisor.
+function tx_put(ctx, path, body, mode, safety, exclusive) {
+    tx_lock(ctx);
+    tx_check(tx_allowed(ctx, path) && index(path, '\x00') == -1 && !match(path, /[\r\n]|(^|\/)\.\.?(\/|$)/), 'запись вне разрешённых путей');
+    if (exclusive) tx_check(fs.lstat(path) == null, 'файл резервной копии уже существует');
+    let old = fs.lstat(path), permissions = mode != null ? mode : (old?.type == 'file' ? old.mode & 0777 : 0600);
+    if (tx_same(path, body) && (old.mode & 0777) == permissions) return false;
+    safety(ctx, 'check-space', [int((length(body) + 1023) / 1024)]);
+    tx_directory(fs.dirname(path));
+    // Refuse parent-directory links: rename must publish inside the managed tree.
+    let parent = fs.dirname(path);
+    tx_check(fs.realpath(parent) == parent, 'каталог записи выходит за разрешённый путь: ' + parent);
+    let temporary = parent + '/.zm-' + tx_token();
+    if (exclusive) tx_append(tx_lock(ctx) + '/backup.links', path + '\n' + temporary + '\n');
+    safety(ctx, 'snapshot-path', [path]);
+    tx_append(tx_lock(ctx) + '/staged.paths', temporary + '\n');
+    let file = fs.open(temporary, 'wx', 0600);
+    tx_check(file != null, 'не удалось создать временный файл: ' + temporary);
+    try {
+        let count = file.write(body);
+        file.close(); file = null;
+        tx_check(count == length(body) && fs.stat(temporary)?.size == length(body), 'ошибка записи: ' + temporary);
+        if (old?.type == 'file') tx_check(fs.chown(temporary, old.uid, old.gid), 'не удалось сохранить владельца: ' + path);
+        tx_check(fs.chmod(temporary, permissions), 'не удалось сохранить права: ' + path);
+        tx_changed(ctx, path);
+        if (exclusive) safety(ctx, 'backup-publish', [temporary, path]);
+__JZM_JZM_UCODE_2__
+)
+export JZM_UCODE_2
+
+JZM_UCODE_3=$(cat <<'__JZM_JZM_UCODE_3__'
+else tx_check(fs.rename(temporary, path), 'не удалось атомарно заменить: ' + path);
+    }
+    catch (e) { if (file != null) file.close(); if (!exclusive) fs.unlink(temporary); die(e.message); }
+    return true;
+}
+
+function tx_remove(ctx, path, safety) {
+    tx_check(tx_allowed(ctx, path), 'удаление вне разрешённых путей');
+    if (fs.lstat(path) == null) return false;
+    safety(ctx, 'snapshot-path', [path]);
+    tx_changed(ctx, path);
+    tx_check(fs.unlink(path), 'не удалось удалить: ' + path);
+    return true;
+}
+
+function tx_service(ctx, action) {
+    tx_check(index(['start', 'stop', 'restart', 'enable', 'disable'], action) != -1, 'неверное действие сервиса');
+    let init = ctx.root + '/etc/init.d/zapret';
+    tx_check(fs.access(init, 'x'), 'не найден init-скрипт: ' + init);
+    tx_lock(ctx);
+    if (index(['start', 'stop', 'restart'], action) != -1) {
+        tx_marker(ctx, 'service.touched');
+        tx_changed(ctx, ctx.config);
+        tx_changed(ctx, ctx.base + '/config');
+    }
+    else tx_marker(ctx, 'service.touched');
+    let sync = ctx.base + '/sync_config.sh';
+    if ((action == 'start' || action == 'restart') && fs.stat(sync))
+        tx_check(system(['/bin/sh', sync]) == 0, 'ошибка sync_config.sh');
+    // These scripts belong to Zapret/procd; the manager adds no shell dispatcher.
+    tx_check(system([init, action]) == 0, 'сервис zapret: ошибка ' + action);
+    invalidate(ctx);
+}
+
+function tx_config(ctx, args, safety) {
+    tx_lock(ctx);
+    tx_check(length(args) > 0 && length(args) % 2 == 0, 'нужны пары опция/значение');
+    for (let i = 0; i < length(args); i += 2)
+        tx_check(match(args[i], /^[A-Za-z][A-Za-z0-9_]*$/), 'неверное имя опции');
+    let handle = config_cursor(ctx, true);
+    tx_check(handle.load('zapret') && handle.get('zapret', '@main[0]') == 'main', 'основная секция конфига не найдена');
+    let changed = false;
+    for (let i = 0; i < length(args); i += 2) {
+        if (handle.get('zapret', '@main[0]', args[i]) == args[i + 1]) continue;
+        tx_check(handle.set('zapret', '@main[0]', args[i], args[i + 1]), 'ошибка UCI set: ' + uci.error());
+        changed = true;
+    }
+    if (!changed) return;
+    safety(ctx, 'check-space', [int(((fs.stat(ctx.config)?.size || 0) + length(join('', args)) + 1023) / 1024)]);
+    tx_changed(ctx, ctx.config);
+    tx_check(handle.commit('zapret'), 'ошибка UCI commit: ' + uci.error());
+}
+
+function tx_firewall(ctx, args, safety) {
+    if (args[0] == 'status') {
+        let state = cached(ctx, 'firewall-status', () => {
+            let handle = config_cursor(ctx, false);
+            tx_check(handle.load('firewall'), 'firewall OpenWrt не найден');
+            let values = handle.get_all('firewall', '@defaults[0]');
+            tx_check(values != null, 'не найдена основная секция firewall');
+            return { values, blocked: handle.get('firewall', 'jzm_quic', 'name') == 'JZM_Block_QUIC' };
+        });
+        printf('Программный Flow Offloading: %s\nАппаратный Flow Offloading: %s\nQUIC: %s\n',
+            state.values.flow_offloading || '0', state.values.flow_offloading_hw || '0',
+            state.blocked ? 'заблокирован JZM' : 'JZM не блокирует');
+        return;
+    }
+    let values = config_values(ctx, 'firewall', '@defaults[0]');
+    let handle = config_cursor(ctx, true);
+    tx_check(handle.load('firewall'), 'firewall OpenWrt не найден');
+    tx_lock(ctx);
+    let restart = false, saved = ctx.state + '/offload.previous';
+    if (args[0] == 'offload') {
+        let original = [values.flow_offloading ?? 'x', values.flow_offloading_hw ?? 'x'];
+        let next;
+        if (args[1] == 'disable') {
+            if (fs.lstat(saved) == null) tx_put(ctx, saved, join('\n', original) + '\n', null, safety);
+            next = ['0', '0'];
+        }
+        else {
+            tx_check(args[1] == 'restore', 'неверная настройка совместимости');
+            let body = fs.readfile(saved, 17);
+            tx_check(body != null && match(body, /^[01x]\n[01x]\n$/), 'сохранённых параметров Flow Offloading нет или они повреждены');
+            next = split(trim(body), '\n');
+        }
+        for (let i = 0; i < 2; i++) {
+            let key = i == 0 ? 'flow_offloading' : 'flow_offloading_hw';
+            if (original[i] != next[i]) restart = true;
+            if (next[i] == 'x') { if (handle.get('firewall', '@defaults[0]', key) != null)
+                tx_check(handle.delete('firewall', '@defaults[0]', key), 'ошибка удаления UCI'); }
+            else tx_check(handle.set('firewall', '@defaults[0]', key, next[i]), 'ошибка записи UCI');
+        }
+        if (args[1] == 'restore') tx_remove(ctx, saved, safety);
+    }
+    else {
+        tx_check(args[0] == 'quic' && index(['on', 'off'], args[1]) != -1, 'неверная настройка совместимости');
+        let existing = handle.get('firewall', 'jzm_quic', 'name');
+        tx_check(existing == null || existing == 'JZM_Block_QUIC', 'имя правила jzm_quic уже занято');
+        if (args[1] == 'off') { if (handle.get('firewall', 'jzm_quic') != null)
+            tx_check(handle.delete('firewall', 'jzm_quic'), 'ошибка удаления правила QUIC'); }
+        else {
+            tx_check(handle.set('firewall', 'jzm_quic', 'rule'), 'ошибка создания правила QUIC');
+            for (let key, value in { name: 'JZM_Block_QUIC', src: 'lan', dest: 'wan', proto: 'udp', dest_port: '80 443', target: 'REJECT', family: 'any' })
+                tx_check(handle.set('firewall', 'jzm_quic', key, value), 'ошибка записи правила QUIC');
+        }
+    }
+    safety(ctx, 'check-space', [int(((fs.stat(ctx.root + '/etc/config/firewall')?.size || 0) + 4095) / 1024)]);
+    tx_marker(ctx, 'firewall.touched');
+    if (restart) tx_marker(ctx, 'firewall.restart');
+    tx_changed(ctx, ctx.root + '/etc/config/firewall');
+    tx_check(handle.commit('firewall'), 'ошибка UCI commit firewall');
+    tx_check(system([ctx.root + '/etc/init.d/firewall', restart ? 'restart' : 'reload']) == 0, 'ошибка применения firewall');
+}
+
+function tx_schedule(ctx, args, safety) {
+    let file = ctx.root + '/etc/crontabs/root', tag = '# zapret-manager:zapret';
+    let original = fs.stat(file) ? fs.readfile(file, 65537) : '';
+    tx_check(original != null && length(original) <= 65536 && index(original, '\x00') == -1, 'неверный crontab');
+    let lines = split(original, '\n');
+    if (lines[-1] == '') pop(lines);
+    lines = filter(lines, (line) => substr(line, -length(tag)) != tag);
+    if (args[1] != 'off') {
+        tx_check(match(args[1], /^([0-9]|1[0-9]|2[0-3])$/), 'час: 0..23');
+        for (let path in [args[0], args[2], args[3]])
+            tx_check(type(path) == 'string' && match(path, /^\/[A-Za-z0-9_./-]+$/) && !match(path, /(^|\/)\.\.?(\/|$)/),
+                'для расписания нужны абсолютные пути без метасимволов');
+        push(lines, '0 ' + args[1] + ' * * * JZM_MODE=command /bin/sh ' + ctx.root + '/usr/bin/jzm --config ' + args[0] +
+            ' auto-best ' + args[2] + ' ' + args[3] + ' >' + ctx.root + '/tmp/zapret-manager.log 2>&1 ' + tag);
+    }
+    let text = length(lines) ? join('\n', lines) + '\n' : '';
+    if (text == original) return;
+    tx_check(fs.access(ctx.root + '/etc/init.d/cron', 'x'), 'не найден cron');
+    tx_put(ctx, file, text, null, safety);
+    tx_check(system([ctx.root + '/etc/init.d/cron', 'restart']) == 0, 'cron: ошибка перезапуска');
+}
+
+function tx_remove_tree(path, depth) {
+    tx_check(depth < 32, 'слишком глубокий каталог удаления');
+    let st = fs.lstat(path);
+    if (st == null) return;
+    if (st.type != 'directory') { tx_check(fs.unlink(path), 'не удалось удалить: ' + path); return; }
+    let names = fs.lsdir(path);
+    tx_check(names != null && length(names) <= 50000, 'не удалось прочитать каталог удаления: ' + path);
+    for (let name in names) tx_remove_tree(path + '/' + name, depth + 1);
+    tx_check(fs.rmdir(path), 'не удалось удалить каталог: ' + path);
+}
+
+function tx_uninstall(ctx, mode, safety) {
+    tx_check(index(['manager', 'all'], mode) != -1, 'ожидается manager или all');
+    tx_lock(ctx);
+    safety(ctx, 'snapshot-uninstall', [mode]);
+    if (fs.stat(ctx.state + '/offload.previous')) tx_firewall(ctx, ['offload', 'restore'], safety);
+    if (fs.stat(ctx.root + '/etc/config/firewall')) {
+        let handle = config_cursor(ctx, false);
+        if (handle.get('firewall', 'jzm_quic', 'name') == 'JZM_Block_QUIC') tx_firewall(ctx, ['quic', 'off'], safety);
+    }
+    tx_schedule(ctx, [ctx.file, 'off'], safety);
+    let hook = ctx.base + '/init.d/openwrt/custom.d/20-jzm-exclude.sh';
+    if (mode == 'manager') {
+        if (tx_remove(ctx, hook, safety)) {
+            let saved = ctx.state + '/legacy-exclusion-hook.sh', legacy = ctx.base + '/init.d/openwrt/custom.d/20-script.sh';
+            if (fs.stat(saved)) {
+                tx_check(fs.lstat(legacy) == null, 'старый хук уже существует; удаление отменено');
+                tx_put(ctx, legacy, fs.readfile(saved), null, safety);
+            }
+            if (fs.access(ctx.root + '/etc/init.d/zapret', 'x')) {
+                let reply = native_running(ctx), running = false;
+                tx_check(type(reply) == 'object' && (reply.zapret == null || type(reply.zapret.instances) == 'object'),
+                    'не удалось проверить сервис перед удалением');
+                if (reply.zapret != null)
+                    for (let name, instance in reply.zapret.instances) if (instance.running == true) running = true;
+                if (running) tx_service(ctx, 'restart');
+            }
+        }
+    }
+    else {
+        tx_remove(ctx, ctx.config, safety);
+        if (fs.lstat(ctx.base)) { tx_changed(ctx, ctx.base); tx_remove_tree(ctx.base, 0); }
+    }
+    tx_remove(ctx, ctx.root + '/usr/bin/jzm', safety);
+    tx_remove(ctx, ctx.root + '/usr/bin/jzm.previous', safety);
+    if (fs.lstat(ctx.state)) { tx_changed(ctx, ctx.state); tx_remove_tree(ctx.state, 0); }
+}
+
+function native_send(ctx, action, args, text, safety) {
+    let path;
+    switch (action) {
+    case 'hosts-write': path = host_path(ctx, args[0]); break;
+    case 'state-write':
+        tx_check(match(args[0], /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/), 'неверное имя файла');
+        path = ctx.state + '/' + args[0]; break;
+    case 'source-write':
+        tx_check(index(['manager', 'flowseal'], args[0]) != -1, 'неизвестный источник');
+        path = ctx.state + '/' + args[0] + '.json'; break;
+    case 'device-hook-write': {
+        let legacy = ctx.base + '/init.d/openwrt/custom.d/20-script.sh';
+        let saved = ctx.state + '/legacy-exclusion-hook.sh';
+        if (args[0] == 'migrate') {
+            if (fs.lstat(saved) == null) tx_put(ctx, saved, fs.readfile(legacy), null, safety);
+            tx_remove(ctx, legacy, safety);
+        }
+        tx_put(ctx, ctx.base + '/init.d/openwrt/custom.d/20-jzm-exclude.sh', text, 0755, safety);
+        return true;
+    }
+    case 'config-restore': {
+        let lock = tx_lock(ctx), stage = lock + '/validate';
+        tx_directory(stage);
+        tx_write(stage + '/zapret', text);
+        let handle = uci.cursor(stage, stage + '/delta', '', { strict: true, print_errors: false });
+        let valid = handle != null && handle.load('zapret') && handle.get('zapret', '@main[0]') == 'main';
+        fs.unlink(stage + '/zapret'); fs.rmdir(stage);
+        tx_check(valid, 'резервная копия содержит неверный UCI или нет основной UCI-секции');
+        path = ctx.config; break;
+    }
+    case 'manager-install': {
+        let destination = args[0];
+        tx_check(destination == ctx.root, 'путь установки не совпадает с транзакцией');
+        // Validation executes the bundle's own version entry; no live files are touched yet.
+        let lock = tx_lock(ctx), temporary = lock + '/manager-candidate';
+        tx_write(temporary, text);
+        safety(ctx, 'manager-validate', [temporary]);
+        let target = ctx.root + '/usr/bin/jzm';
+        if (fs.stat(target)) tx_put(ctx, target + '.previous', fs.readfile(target), 0755, safety);
+        tx_put(ctx, target, text, 0755, safety);
+        fs.unlink(temporary);
+        return true;
+    }
+    case 'manager-config-init':
+        tx_check(args[0] == ctx.root, 'путь установки не совпадает с транзакцией');
+        path = ctx.state + '/manager-config.json';
+        if (fs.lstat(path)) return true;
+        break;
+    case 'resource-bytes': {
+        tx_check(match(args[0], /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.bin$/) && length(text) > 0 && length(text) <= ctx.max_file_bytes,
+            'неверный bin-ресурс');
+        let path = ctx.base + '/files/fake/' + args[0];
+        if (fs.lstat(path)) return true;
+        tx_append(tx_lock(ctx) + '/created_fakes', args[0] + '\n');
+        tx_put(ctx, path, text, null, safety);
+        return true;
+    }
+    case 'backup-write': {
+        tx_check(length(text) > 0, 'пустая резервная копия');
+        let path = args[0], temporary = ctx.root + '/tmp/', backups = ctx.state + '/backups/';
+        tx_check(type(path) == 'string' && match(path, /^[A-Za-z0-9_./ -]+$/) && !match(path, /(^|\/)\.\.?(\/|$)/) &&
+            (substr(path, 0, length(temporary)) == temporary || substr(path, 0, length(backups)) == backups),
+            'копия разрешена только в backups/ или /tmp/');
+        tx_put(ctx, path, text, null, safety, true);
+        return true;
+    }
+    default: return false;
+    }
+    tx_put(ctx, path, text, null, safety);
+    return true;
+};
+
+function native_action(ctx, action, args, safety) {
+    switch (action) {
+    case 'config-set': tx_config(ctx, args, safety); return true;
+    case 'service': tx_service(ctx, args[0]); return true;
+    case 'network': tx_firewall(ctx, args, safety); return true;
+    case 'strategy-state-clear': tx_remove(ctx, ctx.state + '/state.json', safety); return true;
+    case 'settle':
+        tx_check(length(args) == 1 && type(+args[0]) == 'int' && +args[0] >= 0 && +args[0] <= 60, 'неверный интервал ожидания');
+        sleep(+args[0] * 1000); return true;
+    case 'resource-write': {
+        tx_check(match(args[1], /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.bin$/), 'неверное имя bin-ресурса');
+        let path = ctx.base + '/files/fake/' + args[1];
+        if (fs.lstat(path) != null) return true;
+        let st = fs.stat(args[0]);
+        tx_check(st?.type == 'file' && st.size > 0 && st.size <= ctx.max_file_bytes, 'неверный размер bin-ресурса');
+        let body = fs.readfile(args[0], ctx.max_file_bytes + 1);
+        tx_check(body != null && length(body) == st.size, 'ошибка чтения bin-ресурса');
+        tx_append(tx_lock(ctx) + '/created_fakes', args[1] + '\n');
+        tx_put(ctx, path, body, null, safety);
+        return true;
+    }
+    case 'manager-install': {
+        let text = fs.readfile(args[0], ctx.max_file_bytes + 1);
+        tx_check(text != null && length(text) <= ctx.max_file_bytes, 'не удалось прочитать обновление');
+        return native_send(ctx, action, [args[1]], text, safety);
+    }
+    case 'schedule': tx_schedule(ctx, args, safety); return true;
+    case 'uninstall-cleanup': tx_uninstall(ctx, args[0], safety); return true;
+    case 'manager-uninstall':
+        tx_remove(ctx, ctx.root + '/usr/bin/jzm', safety);
+        tx_remove(ctx, ctx.root + '/usr/bin/jzm.previous', safety);
+        return true;
+    }
+    return false;
 };
 
 // ---- src/lib/common.uc ----
@@ -2238,15 +2526,15 @@ function check(condition, message) {
 };
 
 function tempdir() {
-    // The fs.mkdtemp API is absent from ucode shipped with OpenWrt 24.10.
-    // This fixed command has no caller-provided arguments to interpolate.
-    let proc = fs.popen('mktemp -d /tmp/zm-io-XXXXXX', 'r');
-    check(proc != null, 'невозможно запустить mktemp');
-    let path = trim(proc.read('all') || '');
-    let rc = proc.close();
-    check(rc == 0 && match(path, /^\/tmp\/zm-io-[A-Za-z0-9]+$/),
-          'невозможно создать временный каталог');
-    return path;
+    // mkdir is the exclusive allocation primitive available on every supported ucode.
+    for (let attempt = 0; attempt < 8; attempt++) {
+        let token = trim(fs.readfile('/proc/sys/kernel/random/uuid', 64) || '');
+        check(match(token, /^[a-f0-9-]{36}$/), 'не удалось получить случайное имя');
+        let path = '/tmp/zm-io-' + token;
+        if (fs.mkdir(path, 0700)) return path;
+        check(fs.lstat(path) != null, 'невозможно создать временный каталог: ' + fs.error());
+    }
+    die('невозможно создать уникальный временный каталог');
 };
 
 function read(path, limit) {
@@ -2266,7 +2554,53 @@ function backend_command(ctx, action, args) {
     return cmd;
 }
 
+function safety_operation(ctx, action, args) {
+    let rc = system(backend_command(ctx, action, args));
+    check(rc == 0, sprintf('%s: код завершения %d', action, rc));
+}
+
 function backend(ctx, action, args) {
+    args = args || [];
+    if (native_action(ctx, action, args, safety_operation)) return 0;
+    if (action == 'probe') {
+        try {
+            let reply = http_request(ctx, args[2], ctx.max_file_bytes, true, true);
+            return reply.status >= 200 && reply.status < 300 ? 0 : 22;
+        }
+        catch (e) { warn(e.message + '\n'); return 28; }
+    }
+    if (action == 'status') {
+        if (!fs.stat(ctx.root + '/etc/init.d/zapret')) print('zapret: not installed\n');
+        else {
+            let reply = native_running(ctx), running = false;
+            check(type(reply) == 'object', 'не удалось проверить состояние сервиса');
+            if (reply.zapret != null) {
+                check(type(reply.zapret.instances) == 'object', 'неверный ответ procd');
+                for (let name, instance in reply.zapret.instances) if (instance.running == true) running = true;
+            }
+            print(running ? 'zapret: running\n' : 'zapret: stopped\n');
+        }
+        return 0;
+    }
+    if (action == 'doctor') {
+        let errors = 0;
+        for (let name in ['ucode', 'uci', 'curl', 'mktemp']) {
+            let found = executable(name) != null;
+            printf('%s %s\n', found ? 'OK' : 'MISSING', name);
+            if (!found) errors++;
+        }
+        if (!executable('opkg') && !executable('apk')) { print('MISSING opkg/apk\n'); errors++; }
+        for (let path in [ctx.config, ctx.root + '/etc/init.d/zapret'])
+            if (!fs.stat(path)) { printf('MISSING %s\n', path); errors++; }
+        return errors ? 1 : 0;
+    }
+    if (action == 'transaction') {
+        let rc = system(['env', 'JZM_REPORT_CHANGE=1', ...backend_command(ctx, action, args)]);
+        if (rc == 10) { invalidate(ctx); return 0; }
+        // An incomplete rollback is not the state represented by the old cache.
+        if (rc != 0 && fs.stat(ctx.root + '/tmp/zapret-manager.zapret.lock/ready')) invalidate(ctx);
+        return rc;
+    }
     return system(backend_command(ctx, action, args));
 };
 
@@ -2276,40 +2610,28 @@ function run(ctx, action, args) {
 };
 
 function output(ctx, action, args) {
-    let stream = { 'config-get': 'config-read', 'config-get-optional': 'config-read-optional',
-                   'hosts-read': 'hosts-read-stdout' }[action];
-    if (stream != null) {
-        let cmd = backend_command(ctx, stream, args);
-        let quoted = map(cmd, (arg) => "'" + replace(arg, /'/g, "'\\''") + "'");
-        let proc = fs.popen(join(' ', quoted), 'r');
-        check(proc != null, 'не удалось запустить ' + action);
-        let value = '', oversized = false;
-        // Drain an oversized result before close, keeping memory bounded and avoiding a full pipe deadlock.
-        for (let chunk = proc.read(4096); chunk != null && length(chunk); chunk = proc.read(4096)) {
-            if (!oversized) value += chunk;
-            if (length(value) > ctx.max_file_bytes) oversized = true;
-        }
-        let rc = proc.close();
-        check(rc == 0, sprintf('%s: код завершения %d', action, rc));
-        check(!oversized, 'слишком большой результат ' + action);
-        check(index(value, '\x00') == -1, 'NUL в текстовом результате: ' + action);
-        return value;
+    if (action == 'config-get' || action == 'config-get-optional')
+        return config_option(ctx, args[0], action == 'config-get-optional');
+    if (action == 'hosts-read') {
+        let path = host_path(ctx, args[0]);
+        return cached(ctx, 'hosts:' + args[0], () => fs.stat(path) ? read(path, ctx.max_file_bytes) : '');
     }
-    // Capture through a private directory; arguments never pass through a shell parser.
-    let dir = tempdir();
-    let value;
-    try {
-        run(ctx, action, [dir + '/result', ...(args || [])]);
-        value = read(dir + '/result', ctx.max_file_bytes);
+    if (action == 'architecture') {
+        let body = read(ctx.root + '/etc/openwrt_release', 65536);
+        let arch = match(body, /(^|\n)DISTRIB_ARCH='([A-Za-z0-9_-]+)'(\n|$)/);
+        check(arch != null, 'не удалось определить архитектуру OpenWrt');
+        return arch[2] + '\n';
     }
-    catch (e) {
-        fs.unlink(dir + '/result');
-        fs.rmdir(dir);
-        die(e.message);
+    if (action == 'download' || action == 'github-download') {
+        let reply;
+        try { reply = http_request(ctx, args[3], +args[2], false); }
+        catch (e) { die(action + ': код завершения 28: ' + e.message); }
+        if (action == 'github-download')
+            return reply.status + '\n' + (reply.headers['x-ratelimit-remaining'] || '') + '\n' + reply.body;
+        check(reply.status >= 200 && reply.status < 300, 'ошибка HTTP ' + reply.status);
+        return reply.body;
     }
-    fs.unlink(dir + '/result');
-    fs.rmdir(dir);
-    return value;
+    die('неизвестная операция чтения: ' + action);
 };
 
 function write(path, text) {
@@ -2317,25 +2639,11 @@ function write(path, text) {
 };
 
 function send(ctx, action, args, text) {
-    let dir = tempdir();
-    try {
-        write(dir + '/input', text);
-        run(ctx, action, [dir + '/input', ...(args || [])]);
-    }
-    catch (e) {
-        fs.unlink(dir + '/input');
-        fs.rmdir(dir);
-        die(e.message);
-    }
-    fs.unlink(dir + '/input');
-    fs.rmdir(dir);
+    check(native_send(ctx, action, args || [], text, safety_operation), 'неизвестная операция записи: ' + action);
 };
 
 function invoke(ctx, args) {
-    let cmd = getenv('JZM_BOOTSTRAP') ?
-        ['/bin/sh', '-c', 'JZM_MODE=command exec ucode -S -e "$JZM_BOOTSTRAP" -- "$@"', 'jzm-command'] :
-        ['/bin/sh', '-c', 'JZM_MODE=command exec /bin/sh "$@"', 'jzm-command', ctx.home + '/src/launcher.sh'];
-    return system([...cmd, ...(fs.stat(ctx.file) ? ['--config', ctx.file] : []), ...args]);
+    return backend(ctx, 'transaction', [...(fs.stat(ctx.file) ? ['--config', ctx.file] : []), ...args]);
 };
 
 function target_text(ctx, file) {
@@ -2366,7 +2674,12 @@ function settings(home, file) {
     check(c.connect_timeout <= c.request_timeout && c.request_timeout <= 300 &&
           c.settle_seconds <= 60 && c.max_strategies <= 1024 && c.max_urls <= 256,
           'таймауты или лимиты превышены');
-    check(type(c.hostlist_urls) == 'object', 'hostlist_urls: ожидается объект');
+__JZM_JZM_UCODE_3__
+)
+export JZM_UCODE_3
+
+JZM_UCODE_4=$(cat <<'__JZM_JZM_UCODE_4__'
+check(type(c.hostlist_urls) == 'object', 'hostlist_urls: ожидается объект');
     for (let key, url in c.hostlist_urls) {
         check(index(['user', 'exclude', 'google'], key) != -1, 'неизвестный список: ' + key);
         check(type(url) == 'string' && match(url, /^https:\/\/[^[:space:]]+$/), 'URL списка должен быть HTTPS');
@@ -2498,7 +2811,8 @@ function label_strategy(name, body) {
 
 function parse_catalog(ctx, text, wanted) {
     check(type(text) == 'string' && index(text, '\x00') == -1, 'неверный текст каталога');
-    let sections = split('\n' + text, /\n[ \t\r]*#/), result = [], seen = {};
+    let sections = split('\n' + text, /\n[ \t\r]*#/), result = [], seen = {}, wanted_index = {};
+    for (let name in (wanted || [])) wanted_index[name] = true;
     let name_pattern = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
     check(!length(trim(sections[0])), 'стрратегия без заголовка #имя');
     check(length(sections) > 1 && length(sections) - 1 <= ctx.max_strategies, 'лимит числа стратегий');
@@ -2507,22 +2821,19 @@ function parse_catalog(ctx, text, wanted) {
         let section = sections[i], end = index(section, '\n');
         let name = trim(end == -1 ? section : substr(section, 0, end));
         check(length(name) <= 64 && match(name, name_pattern), 'неверное имя стратегии: ' + name);
-__JZM_JZM_UCODE_2__
-)
-export JZM_UCODE_2
-
-JZM_UCODE_3=$(cat <<'__JZM_JZM_UCODE_3__'
-check(!seen[name], 'повтор стратегии: ' + name);
+        check(!seen[name], 'повтор стратегии: ' + name);
         seen[name] = true;
-        if (wanted == null || index(wanted, strategy_key(name)) != -1)
+        if (wanted == null || wanted_index[strategy_key(name)] == true)
             push(result, { name, body: validate_body(end == -1 ? '' : substr(section, end + 1)) });
     }
     return result;
 };
 
 function catalog(ctx, file, wanted) {
-    let text = file ? read(file, ctx.max_file_bytes) : resource(ctx.home, 'strategies.txt');
-    return parse_catalog(ctx, text, wanted);
+    return cached(ctx, 'catalog:' + sprintf('%J', [file, wanted]), () => {
+        let text = file ? read(file, ctx.max_file_bytes) : resource(ctx.home, 'strategies.txt');
+        return parse_catalog(ctx, text, wanted);
+    });
 };
 
 function select_strategy(ctx, name, file) {
@@ -2542,11 +2853,11 @@ function compose(ctx, names, file) {
     check(length(names) > 0, 'укажите имена стратегий');
     let seen = {};
     for (let name in names) { check(!seen[name], 'повтор стратегии: ' + name); seen[name] = true; }
-    let list = catalog(ctx, file, map(names, strategy_key));
+    let list = catalog(ctx, file, map(names, strategy_key)), by_name = {};
+    for (let strategy in list) by_name[strategy.name] = strategy;
     return compose_bodies(map(names, (name) => {
-        let found = filter(list, (s) => s.name == name);
-        check(length(found) == 1, 'стратегия не найдена: ' + name);
-        return label_strategy(name, found[0].body);
+        check(exists(by_name, name), 'стратегия не найдена: ' + name);
+        return label_strategy(name, by_name[name].body);
     }));
 };
 
@@ -2605,7 +2916,12 @@ function validate_list_snapshot(text, limit, max_bytes) {
 
 function domains(text, limit) {
     let seen = {}, result = [], label_pattern = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-    for (let raw in split(text, '\n')) {
+    for (let offset = 0; offset < length(text);) {
+        // A DNS line is bounded before allocation; do not split a 50k-entry input.
+        let window = substr(text, offset, 1025), end = index(window, '\n');
+        check(end != -1 || length(window) <= 1024, 'слишком длинная строка доменного списка');
+        let raw = end == -1 ? window : substr(window, 0, end);
+        offset += end == -1 ? length(window) : end + 1;
         let name = lc(trim(split(raw, '#')[0]));
         if (!length(name)) continue;
         check(length(name) <= 253 && index(name, '.') != -1, 'неверный домен: ' + name);
@@ -2656,26 +2972,31 @@ function legacy_addresses(body) {
     return values;
 };
 
-function legacy_exclusions(ctx) {
+function compute_legacy_exclusions(ctx) {
     let path = ctx.base + '/init.d/openwrt/custom.d/20-script.sh';
     return fs.stat(path) ? legacy_addresses(read(path, 16384)) : null;
 };
 
-function excluded(ctx) {
-    let path = ctx.state + '/devices.txt', result = legacy_exclusions(ctx) || [];
+function legacy_exclusions(ctx) { return cached(ctx, 'legacy-devices', () => compute_legacy_exclusions(ctx)); };
+
+function compute_excluded(ctx) {
+    let path = ctx.state + '/devices.txt', result = [...(legacy_exclusions(ctx) || [])], seen = {};
+    for (let ip in result) seen[ip] = true;
     let body = fs.stat(path) ? read(path, 16384) : '';
     for (let line in split(body, '\n')) {
         line = trim(line);
         if (length(line)) {
             let ip = ipv4(line);
-            if (index(result, ip) == -1) push(result, ip);
+            if (!seen[ip]) { seen[ip] = true; push(result, ip); }
         }
     }
     check(length(result) <= 256, 'слишком много исключённых устройств');
     return result;
 };
 
-function device_list(ctx) {
+function excluded(ctx) { return cached(ctx, 'devices', () => compute_excluded(ctx)); };
+
+function compute_device_list(ctx) {
     let items = {}, path = ctx.root + '/tmp/dhcp.leases';
     if (fs.stat(path)) {
         for (let line in split(read(path, ctx.max_file_bytes), '\n')) {
@@ -2691,6 +3012,8 @@ function device_list(ctx) {
     for (let ip in excluded(ctx)) if (!exists(items, ip)) items[ip] = { ip, name: 'вне DHCP / offline' };
     return map(sort(keys(items)), (ip) => items[ip]);
 };
+
+function device_list(ctx) { return cached(ctx, 'device-list', () => compute_device_list(ctx)); };
 
 function exclusion_hook(ctx, addresses) {
     let cfg = json(resource(ctx.home, 'network.json'));
@@ -2731,17 +3054,11 @@ function normalize_options(body) {
 function sha256_text(text) {
     check(type(text) == 'string' && length(text) <= 65536 && index(text, '\x00') == -1, 'неверные данные для SHA256');
     for (let entry in digest_cache) if (entry.text == text) return entry.digest;
-    // Quote every byte, including user-supplied apostrophes; printf never interprets data as code.
-    let quoted = "'" + replace(text, /'/g, "'\\''") + "'";
-    check(length(quoted) < 100000, 'слишком большие данные для SHA256');
-    let proc = fs.popen("printf '%s' " + quoted + ' | sha256sum', 'r');
-    check(proc != null, 'не удалось запустить sha256sum');
-    let reply = proc.read(256) || '', rc = proc.close();
-    let digest = match(reply, /^([a-f0-9]+)[ \t]+[*]?-/);
-    check(rc == 0 && digest && length(digest[1]) == 64, 'не удалось вычислить SHA256; нужна команда sha256sum');
+    let digest = sha256(text);
+    check(type(digest) == 'string' && length(digest) == 64, 'не удалось вычислить SHA256');
     if (length(digest_cache) == 4) shift(digest_cache);
-    push(digest_cache, { text, digest: digest[1] });
-    return digest[1];
+    push(digest_cache, { text, digest });
+    return digest;
 };
 
 function strategy_hash(body) {
@@ -2769,7 +3086,7 @@ function validate_applied(state) {
 
 function read_applied(ctx) {
     let path = ctx.state + '/state.json';
-    return fs.stat(path) ? validate_applied(json(read(path, 65536))) : null;
+    return cached(ctx, 'applied', () => fs.stat(path) ? validate_applied(json(read(path, 65536))) : null);
 };
 
 function applied_names(state) {
@@ -2837,7 +3154,12 @@ function applied_status(current_hash, state, catalog_hash, empty) {
 
 function parse_packages(body, format) {
     let result = {};
-    for (let record in split(replace(body, /\r/g, '') + '\n\n', /\n\n+/)) {
+__JZM_JZM_UCODE_4__
+)
+export JZM_UCODE_4
+
+JZM_UCODE_5=$(cat <<'__JZM_JZM_UCODE_5__'
+for (let record in split(replace(body, /\r/g, '') + '\n\n', /\n\n+/)) {
         if (index(record, 'zapret') == -1) continue;
         let package = match(record, format == 'apk' ? /(^|\n)P:([^\n]+)/ : /(^|\n)Package: *([^\n]+)/);
         if (!package || (package[2] != 'zapret' && package[2] != 'luci-app-zapret')) continue;
@@ -2856,29 +3178,42 @@ function parse_packages(body, format) {
 };
 
 function package_versions(ctx) {
-    for (let item in [['/lib/apk/db/installed', 'apk'], ['/usr/lib/opkg/status', 'opkg']]) {
-        let path = ctx.root + item[0];
-        if (fs.stat(path)) return parse_packages(read(path, 8388608), item[1]);
-    }
-    return {};
+    return cached(ctx, 'packages', () => {
+        for (let item in [['/lib/apk/db/installed', 'apk'], ['/usr/lib/opkg/status', 'opkg']]) {
+            let path = ctx.root + item[0], st = fs.stat(path);
+            if (st == null) continue;
+            check(st.type == 'file' && st.size <= 8388608, 'слишком большая пакетная база');
+            let input = fs.open(path, 'r');
+            check(input != null, 'не удалось открыть пакетную базу');
+            let pending = '', result = {}, bytes = 0;
+            try {
+                for (let chunk = input.read(32768); chunk != null && length(chunk); chunk = input.read(32768)) {
+                    bytes += length(chunk);
+                    check(bytes <= 8388608, 'слишком большая пакетная база');
+                    let records = split(pending + replace(chunk, /\r/g, ''), /\n\n+/);
+                    pending = pop(records);
+                    check(length(pending) <= 65536, 'слишком большая запись пакетной базы');
+                    // Native chunk splitting skips descriptions without a per-line VM loop.
+                    for (let name, version in parse_packages(join('\n\n', records), item[1])) result[name] = version;
+                }
+                check(bytes == st.size, 'ошибка чтения пакетной базы');
+                for (let name, version in parse_packages(pending, item[1])) result[name] = version;
+            }
+            catch (e) { input.close(); die(e.message); }
+            input.close();
+            return result;
+        }
+        return {};
+    });
 };
 
 function configured_strategy(ctx) {
-    if (!fs.stat(ctx.config)) return '';
-    // root accepts neither quotes nor shell metacharacters in settings().
-    let uci = "uci -c '" + ctx.root + "/etc/config' -q get ";
-    let proc = fs.popen(uci + "'zapret.@main[0].NFQWS_OPT' 2>/dev/null || " +
-        uci + "'zapret.@main[0]' >/dev/null 2>&1", 'r');
-    check(proc != null, 'не удалось прочитать стратегию UCI');
-    let body = '';
-    while (true) {
-        let chunk = proc.read(4096);
-        if (chunk == null || !length(chunk)) break;
-        body += chunk;
-        if (length(body) > 65536) { proc.close(); die('слишком большая стратегия UCI'); }
-    }
-    check(proc.close() == 0, 'не удалось прочитать NFQWS_OPT');
-    return body;
+    return cached(ctx, 'configured-strategy', () => {
+        if (!fs.stat(ctx.config)) return '';
+        let body = config_option(ctx, 'NFQWS_OPT', true);
+        check(length(body) <= 65536, 'слишком большая стратегия UCI');
+        return body;
+    });
 };
 
 function normalized_strategy(body) {
@@ -2887,12 +3222,14 @@ function normalized_strategy(body) {
 
 function inspect_strategy(body, list) {
     let sections = strategy_sections(body), references = [], by_name = {}, overrides = {};
-    let wanted = map(sections, (s) => strategy_key(s.label));
+    let wanted = {};
+    for (let section in sections) wanted[strategy_key(section.label)] = true;
     let labelled = length(filter(sections, (s) => s.label == null)) == 0;
     for (let candidate in list) {
         let name = strategy_key(candidate.name);
-        if (by_name[name] || (labelled && index(wanted, name) == -1)) continue;
-        let ref = { name, body: normalized_strategy(candidate.body) };
+        if (by_name[name] || (labelled && !wanted[name])) continue;
+        let normalized = normalized_strategy(candidate.body);
+        let ref = { name, body: normalized, parts: split(normalized, '--new\n') };
         by_name[name] = ref; push(references, ref);
     }
     // A named replacement accounts for precisely the profiles removed by the editor.
@@ -2918,7 +3255,7 @@ function inspect_strategy(body, list) {
         for (let i = 0; i < length(blocks);) {
             let found = null, count = 0;
             for (let ref in references) {
-                let parts = split(ref.body, '--new\n');
+                let parts = ref.parts;
                 if (!length(ref.body) || length(parts) <= count || i + length(parts) > length(blocks)) continue;
                 if (join('--new\n', slice(blocks, i, i + length(parts))) == ref.body) { found = ref; count = length(parts); }
             }
@@ -2947,13 +3284,13 @@ function reference_catalog(ctx, wanted) {
     for (let kind in ['flowseal', 'manager']) {
         let path = ctx.state + '/' + kind + '.json';
         if (!fs.stat(path)) continue;
-        try { list = [...list, ...parse_catalog(ctx, json(read(path, ctx.max_file_bytes)).catalog, wanted)]; }
+        try { list = [...list, ...parse_catalog(ctx, cached(ctx, 'source-document:' + path, () => json(read(path, ctx.max_file_bytes))).catalog, wanted)]; }
         catch (e) { /* Invalid cached presets cannot hide the actual configuration. */ }
     }
     return [...list, ...catalog(ctx, null, wanted)];
 };
 
-function strategy_state(ctx, summary_only) {
+function compute_strategy_state(ctx, summary_only) {
     let body = configured_strategy(ctx), state = null;
     if (!length(normalize_options(body))) return { summary: 'не выбрана', sections: [] };
     try { state = read_applied(ctx); } catch (e) { /* An invalid baseline cannot establish provenance. */ }
@@ -2967,6 +3304,11 @@ function strategy_state(ctx, summary_only) {
         [...map(raw, (s) => strategy_key(s.label)), ...applied_names(state)];
     let list = reference_catalog(ctx, wanted);
     return { summary: identify_strategy(body, list, state), sections: inspect_strategy(body, list) };
+};
+
+function strategy_state(ctx, summary_only) {
+    return cached(ctx, summary_only ? 'strategy-summary' : 'strategy-sections',
+        () => compute_strategy_state(ctx, summary_only));
 };
 
 function group_state(sections, group) {
@@ -2992,22 +3334,10 @@ function procd_running(reply) {
 };
 
 function service_running(ctx) {
-    let ubus = ctx.root + '/bin/ubus';
-    if (fs.stat(ubus)) {
-        let proc = fs.popen("'" + ubus + "' -t 1 call service list '{\"name\":\"zapret\"}' 2>/dev/null", 'r');
-        if (proc == null) return null;
-        let reply = proc.read(65537), rc = proc.close();
-        if (rc != 0 || reply == null || length(reply) > 65536) return null;
-        try { return procd_running(json(reply)); } catch (e) { return null; }
-    }
-    let init = ctx.root + '/etc/init.d/zapret';
-    return fs.stat(init) != null && system(['/bin/sh', '-c',
-__JZM_JZM_UCODE_3__
-)
-export JZM_UCODE_3
-
-JZM_UCODE_4=$(cat <<'__JZM_JZM_UCODE_4__'
-'exec "$1" running >/dev/null 2>&1', 'jzm-status', init]) == 0;
+    return cached(ctx, 'service-running', () => {
+        try { return procd_running(native_running(ctx)); }
+        catch (e) { return null; }
+    });
 };
 
 function zapret_status(ctx) {
@@ -3196,15 +3526,16 @@ function source_data(ctx, kind, wanted) {
     if (!fs.stat(file)) {
         check(kind == 'manager', 'сначала обновите каталог Flowseal в меню');
         let text = resource(ctx.home, 'strategies.txt');
-        return { catalog: text, strategies: parse_catalog(ctx, text, wanted), assets: {}, revision: 'встроенный' };
+        return { catalog: text, strategies: cached(ctx, 'builtin-presets:' + sprintf('%J', wanted), () => parse_catalog(ctx, text, wanted)), assets: {}, revision: 'встроенный' };
     }
-    let value = json(read(file, ctx.max_file_bytes));
+    let value = cached(ctx, 'source-document:' + file, () => json(read(file, ctx.max_file_bytes)));
     check(value.format == 1 && value.source == kind && type(value.revision) == 'string' &&
           length(value.revision) == 40 && match(value.revision, /^[a-f0-9]+$/) &&
           type(value.assets) == 'object', 'повреждён каталог источника');
     check(type(value.catalog) == 'string', 'повреждён текст каталога источника');
-    value.strategies = parse_catalog(ctx, value.catalog, wanted);
-    return value;
+    let strategies = cached(ctx, 'source-presets:' + kind + ':' + sprintf('%J', wanted),
+        () => parse_catalog(ctx, value.catalog, wanted));
+    return { ...value, strategies };
 };
 
 function refresh_source(ctx, kind) {
@@ -3253,15 +3584,10 @@ function prepare_assets(ctx, kind, body, prepared) {
         check(path != null, 'источник не содержит fake-файл: ' + local);
         if (kind == 'manager' && pinned == null) pinned = revision(ctx, repo);
         let rev = kind == 'manager' ? pinned : data.revision;
-        let dir = tempdir();
-        try {
-            run(ctx, 'check-space', [int((ctx.max_file_bytes + 1023) / 1024)]);
-            run(ctx, 'download', [dir + '/blob', ctx.connect_timeout, ctx.request_timeout,
-                ctx.max_file_bytes, raw_url(repo, rev, path)]);
-            run(ctx, 'resource-write', [dir + '/blob', local]);
-        }
-        catch (e) { fs.unlink(dir + '/blob'); fs.rmdir(dir); die(e.message); }
-        fs.unlink(dir + '/blob'); fs.rmdir(dir);
+        run(ctx, 'check-space', [int((ctx.max_file_bytes + 1023) / 1024)]);
+        let payload = output(ctx, 'download', [ctx.connect_timeout, ctx.request_timeout,
+            ctx.max_file_bytes, raw_url(repo, rev, path)]);
+        send(ctx, 'resource-bytes', [local], payload);
     }
 };
 
@@ -3279,7 +3605,12 @@ function release_install(ctx) {
     let name = 'zapret_' + release.tag_name + '_' + arch + '.zip';
     let selected = filter(release.assets, (a) => a.name == name);
     check(length(selected) == 1, 'нет сборки Zapret для архитектуры ' + arch);
-    let url = 'https://github.com/' + ctx.sources.installer_repo + '/releases/download/' + release.tag_name + '/' + name;
+__JZM_JZM_UCODE_5__
+)
+export JZM_UCODE_5
+
+JZM_UCODE_6=$(cat <<'__JZM_JZM_UCODE_6__'
+let url = 'https://github.com/' + ctx.sources.installer_repo + '/releases/download/' + release.tag_name + '/' + name;
     check(selected[0].browser_download_url == url && type(selected[0].size) == 'int' &&
         selected[0].size > 0 && selected[0].size <= 16777216, 'неверный файл релиза');
     let digest = selected[0].digest || '';
@@ -3340,25 +3671,13 @@ function update_origin(ctx) {
 }
 
 function update_remote(ctx, url) {
-    // Every URL component is validated by settings(); no shell metacharacters are accepted.
     check(match(url, /^https:\/\/[A-Za-z0-9_.\/-]+$/), 'неверный URL обновления');
-    let cmd = "curl --fail --silent --show-error --location --max-redirs 3 --proto '=https' --proto-redir '=https'" +
-        ' --connect-timeout ' + ctx.connect_timeout + ' --max-time ' + ctx.request_timeout +
-        ' --max-filesize ' + ctx.max_file_bytes + " '" + url + "' 2>/dev/null";
-    let proc = fs.popen(cmd, 'r');
-    check(proc != null, 'не удалось запустить curl');
-    let body = '';
-    while (true) {
-        let chunk = proc.read(4096);
-        if (chunk == null || !length(chunk)) break;
-        body += chunk;
-        if (length(body) > ctx.max_file_bytes) { proc.close(); die('обновление слишком большое'); }
-    }
-    check(proc.close() == 0 && length(body), 'не удалось получить обновление');
+    let body = output(ctx, 'download', [ctx.connect_timeout, ctx.request_timeout, ctx.max_file_bytes, url]);
+    check(length(body), 'не удалось получить обновление');
     return body;
 }
 
-function update_status(ctx) {
+function compute_update_status(ctx) {
     if (!length(ctx.updater.repo)) return { label: 'источник не настроен', available: false };
     let path = ctx.state + '/update.json';
     try {
@@ -3369,6 +3688,10 @@ function update_status(ctx) {
         return data;
     }
     catch (e) { return { label: 'ещё не проверена', available: false }; }
+};
+
+function update_status(ctx) {
+    return cached(ctx, 'update-status', () => compute_update_status(ctx));
 };
 
 function check_update(ctx) {
@@ -3395,31 +3718,13 @@ function cache_update(ctx, data) {
     send(ctx, 'state-write', ['update.json'], sprintf('%J\n', data));
 };
 
-function start_update_check(ctx) {
-    if (!length(ctx.updater.repo) || ctx.root != '' || !getenv('JZM_BOOTSTRAP') || fs.stat('/usr/bin/jzm') == null) return;
-    let status = update_status(ctx);
-    if (status.checked != null && time() - status.checked < 21600) return;
-    let config = fs.stat(ctx.file) ? ['--config', ctx.file] : [];
-    system(['/bin/sh', '-c',
-        'JZM_BACKGROUND_UPDATE=1 JZM_MODE=command ucode -S -e "$JZM_BOOTSTRAP" -- "$@" </dev/null >/dev/null 2>&1 &',
-        'jzm-update', ...config, 'manager-check']);
-};
-
 function apply_update(ctx) {
     if (!getenv('ZM_TRANSACTION')) { check(invoke(ctx, ['manager-update']) == 0, 'не удалось обновить менеджер'); return; }
     let info = update_status(ctx);
     check(info.available, 'новой версии нет; сначала проверьте обновления');
     let body = update_remote(ctx, 'https://raw.githubusercontent.com/' + ctx.updater.repo + '/' + info.revision + '/' + ctx.updater.path);
     check(index(body, '\n# JZM_VERSION=' + info.version + '\n') != -1 && match(body, /(^|\n)# JZM_FORMAT=2(\n|$)/), 'версия загруженного файла не совпала');
-    let dir = tempdir();
-    try {
-        let path = dir + '/jzm';
-        check(fs.writefile(path, body) == length(body), 'не удалось записать обновление');
-        run(ctx, 'manager-validate', [path]);
-        run(ctx, 'manager-install', [path, ctx.root]);
-    }
-    catch (e) { fs.unlink(dir + '/jzm'); fs.rmdir(dir); die(e.message); }
-    fs.unlink(dir + '/jzm'); fs.rmdir(dir);
+    send(ctx, 'manager-install', [ctx.root], body);
     printf('Менеджер обновлён до %s. Предыдущая сборка: /usr/bin/jzm.previous\nЗапустите jzm заново.\n', info.version);
 };
 
@@ -3427,16 +3732,13 @@ function apply_update(ctx) {
 
 let ended = false;
 
+let color_enabled = null;
 function paint(code, text) {
-    let enabled = getenv('JZM_COLOR') == 'always' || (fs.stdout.isatty() &&
+    if (color_enabled == null) color_enabled = getenv('JZM_COLOR') == 'always' || (fs.stdout.isatty() &&
         getenv('NO_COLOR') == null && getenv('TERM') != 'dumb');
-    return enabled ? '\x1b[' + code + 'm' + text + '\x1b[0m' : text;
+    return color_enabled ? '\x1b[' + code + 'm' + text + '\x1b[0m' : text;
 }
-__JZM_JZM_UCODE_4__
-)
-export JZM_UCODE_4
 
-JZM_UCODE_5=$(cat <<'__JZM_JZM_UCODE_5__'
 function menu_line(key, text) { printf('  %s %s\n', paint('36;1', key + '.'), text); }
 
 function prompt(label, fallback) {
@@ -3476,7 +3778,7 @@ function choice(title, labels) {
 let menu_executor = null;
 
 function command(ctx, args) {
-    let rc = menu_executor ? menu_executor([...(fs.stat(ctx.file) ? ['--config', ctx.file] : []), ...args]) : invoke(ctx, args);
+    let rc = menu_executor ? menu_executor([...(cached(ctx, 'settings-file-exists', () => fs.stat(ctx.file) != null) ? ['--config', ctx.file] : []), ...args], ctx) : invoke(ctx, args);
     check(rc == 0, 'действие не выполнено; причина указана выше');
 }
 
@@ -3576,8 +3878,11 @@ function compose_menu(ctx) {
         try { available = source_data(ctx, 'manager').strategies; } catch (e) { /* Picker offers catalog repair. */ }
         screen('Собрать стратегию'); current_strategy(state);
         for (let i = 0; i < length(groups); i++) {
-            let names = filter(available, (s) => strategy_group(s.name) == groups[i]);
-            sort(names, strategy_order);
+            let names = cached(ctx, 'menu-group:' + groups[i], () => {
+                let presets = filter(available, (s) => strategy_group(s.name) == groups[i]);
+                sort(presets, strategy_order);
+                return presets;
+            });
             let hint = !length(names) ? 'нет в каталоге' : names[0].name + (length(names) > 1 ? '–' + names[-1].name : '');
             let value = group_state(state.sections, groups[i]);
             menu_line(i + 1, labels[i] + '  ' + paint(value == '[отключено]' ? '2' : '35;1', value) + '  ' + paint('2', '(' + hint + ')'));
@@ -3654,7 +3959,7 @@ function strategy_menu(ctx) {
 
 function install_menu(ctx) {
     while (!ended) {
-        let state = zapret_status(ctx);
+        let state = cached(ctx, 'zapret-status', () => zapret_status(ctx));
         let c = choice('Zapret · ' + (state.installed ? state.version : 'не установлен'),
             state.installed ? ['Обновить Zapret', 'Удалить Zapret', 'Удалить только JZM', 'Удалить всё: JZM + Zapret + LuCI'] :
                 ['Установить Zapret', 'Удалить только JZM', 'Удалить всё: JZM + Zapret + LuCI']);
@@ -3731,7 +4036,12 @@ function config_menu(ctx) {
             if (c == 1) { command(ctx, ['config', 'show']); return; }
             if (c == 9 || c == 10) {
                 command(ctx, ['network', 'status']);
-                let action = choice(c == 9 ? 'Flow Offloading' : 'QUIC', c == 9 ?
+__JZM_JZM_UCODE_6__
+)
+export JZM_UCODE_6
+
+JZM_UCODE_7=$(cat <<'__JZM_JZM_UCODE_7__'
+let action = choice(c == 9 ? 'Flow Offloading' : 'QUIC', c == 9 ?
                     ['Отключить ускорение для совместимости с Zapret', 'Вернуть прежние настройки ускорения'] :
                     ['Блокировать QUIC, использовать TCP', 'Снять блокировку QUIC, созданную JZM']);
                 if (action) command(ctx, ['network', c == 9 ? 'offload' : 'quic',
@@ -3790,13 +4100,14 @@ function backup_menu(ctx) {
 }
 
 function menu(initial, executor) {
+    ended = false;
+    session_cache(initial);
     menu_executor = executor;
-    let ctx = initial, update_started = false;
+    let ctx = initial;
     while (!ended) {
         screen('just-zapret-manager ' + VERSION);
         printf('Менеджер: %s\nПоследняя версия менеджера: %s\n', paint('35;1', VERSION), update_status(ctx).label);
-        if (!update_started) { start_update_check(ctx); update_started = true; }
-        let state = zapret_status(ctx);
+        let state = cached(ctx, 'zapret-status', () => zapret_status(ctx));
         printf('\nZapret: %s\n', state.installed ? paint('32;1', 'установлен · ' + state.version) : paint('31;1', 'не установлен'));
         printf('Сервис: %s\n', paint(state.running ? '32;1' : '33;1', state.running == null ? 'не удалось проверить' : (state.running ? 'запущен' : 'остановлен')));
         printf('%s: %s\n\n', state.running == false ? 'Выбранные стратегии (не запущены)' : 'Стратегии', paint('35', state.strategy));
@@ -3858,12 +4169,7 @@ function editable(ctx, key, value) {
             check(match(range, /^[0-9]{1,5}(-[0-9]{1,5})?$/), 'неверный диапазон портов');
             let pair = split(range, '-');
             check(+pair[0] >= 1 && +pair[0] <= 65535 &&
-__JZM_JZM_UCODE_5__
-)
-export JZM_UCODE_5
-
-JZM_UCODE_6=$(cat <<'__JZM_JZM_UCODE_6__'
-(length(pair) == 1 || (+pair[1] >= +pair[0] && +pair[1] <= 65535)), 'порт вне диапазона');
+                  (length(pair) == 1 || (+pair[1] >= +pair[0] && +pair[1] <= 65535)), 'порт вне диапазона');
         }
     }
     else if (key == 'MODE_FILTER')
@@ -3917,12 +4223,14 @@ function apply(ctx, body, transient) {
     for (let proto in ['TCP', 'UDP']) {
         let option = 'NFQWS_PORTS_' + proto;
         let ports = trim(output(ctx, 'config-get-optional', [option]));
-        let previous = ports;
-        let items = length(ports) ? split(ports, ',') : [];
+        let previous = ports, seen_ports = {};
+        let items = [];
+        for (let port in (length(ports) ? split(ports, ',') : []))
+            if (!exists(seen_ports, port)) { seen_ports[port] = true; push(items, port); }
         let filter_pattern = regexp('^--filter-' + lc(proto) + '=([0-9,-]+)$');
         for (let line in split(body, '\n')) {
             let m = match(line, filter_pattern);
-            if (m) for (let port in split(m[1], ',')) if (index(items, port) == -1) push(items, port);
+            if (m) for (let port in split(m[1], ',')) if (!exists(seen_ports, port)) { seen_ports[port] = true; push(items, port); }
         }
         if (length(items)) {
             ports = join(',', items);
@@ -3961,11 +4269,11 @@ function probe(ctx, targets) {
     return ok;
 }
 
-function benchmark(ctx, args, keep, source_kind) {
+function benchmark(ctx, args, keep, source_kind, prepared) {
     arity(args, 1, 2);
     let targets = urls(target_text(ctx, args[0]), ctx.max_urls);
     let list = [], results = [];
-    for (let s in catalog(ctx, args[1])) {
+    for (let s in (prepared?.strategies || catalog(ctx, args[1]))) {
         try { dependencies(ctx, s.body); push(list, s); }
         catch (e) { push(results, { name: s.name, skipped: e.message }); }
     }
@@ -3987,7 +4295,7 @@ function benchmark(ctx, args, keep, source_kind) {
     if (applied) {
         let body = label_strategy(best.name, filter(list, (s) => s.name == best.name)[0].body);
         initialize_lists(ctx);
-        if (source_kind != null) prepare_assets(ctx, source_kind, body);
+        if (source_kind != null) prepare_assets(ctx, source_kind, body, prepared);
         apply(ctx, body);
     }
     printf('%J\n', { control, total: length(targets), results, best, applied });
@@ -4019,8 +4327,17 @@ function host_command(ctx, args) {
         arity(extra, 1, ctx.max_domains);
         let old = domains(output(ctx, 'hosts-read', [kind]), ctx.max_domains);
         let change = domains(join('\n', extra), ctx.max_domains);
-        items = action == 'add' ? domains(join('\n', [...old, ...change]), ctx.max_domains) :
-            filter(old, (name) => index(change, name) == -1);
+        let names = {};
+        if (action == 'add') {
+            for (let name in old) names[name] = true;
+            for (let name in change) names[name] = true;
+            check(length(names) <= ctx.max_domains, 'превышен лимит доменов');
+            items = sort(keys(names));
+        }
+        else {
+            for (let name in change) names[name] = true;
+            items = filter(old, (name) => !exists(names, name));
+        }
     }
     let body = length(items) ? join('\n', items) + '\n' : '';
     check(length(body) <= ctx.max_file_bytes, 'список превышает лимит размера');
@@ -4096,6 +4413,24 @@ function dispatch(ctx, command, args) {
     // Run after acquiring the transaction lock, before downloads or configuration writes.
     if (changes_strategy && !approve_strategy_change(ctx)) { print('\nДействие отменено.\n'); return; }
     switch (command) {
+    case 'backend-operation': {
+        let action = args[0], values = slice(args, 3);
+        if (index(['state-write', 'source-write', 'hosts-write', 'config-restore', 'device-hook-write',
+                   'manager-config-init', 'backup-write'], action) != -1) {
+            check(length(values), 'не указан файл операции');
+            send(ctx, action, slice(values, 1), read(values[0], ctx.max_file_bytes));
+        }
+        else if (action == 'config-read' || action == 'config-read-optional')
+            print(output(ctx, action == 'config-read' ? 'config-get' : 'config-get-optional', values));
+        else if (action == 'hosts-read-stdout') print(output(ctx, 'hosts-read', values));
+        else {
+            check(index(['config-set', 'service', 'network', 'resource-write', 'manager-install',
+                'manager-uninstall', 'strategy-state-clear', 'schedule', 'uninstall-cleanup', 'status', 'doctor', 'settle'], action) != -1,
+                'неизвестная нативная операция: ' + action);
+            run(ctx, action, values);
+        }
+        break;
+    }
     case 'uninstall':
         arity(args, 1, 1);
         check(args[0] == 'manager', 'полное удаление выполняется через пакетную фазу');
@@ -4170,7 +4505,12 @@ function dispatch(ctx, command, args) {
         check(kind == 'manager' || kind == 'flowseal', 'неизвестный источник');
         if (action == 'remove') {
             arity(args, kind == 'manager' ? 3 : 2, kind == 'manager' ? 3 : 2);
-            let current = output(ctx, 'config-get-optional', ['NFQWS_OPT']);
+__JZM_JZM_UCODE_7__
+)
+export JZM_UCODE_7
+
+JZM_UCODE_8=$(cat <<'__JZM_JZM_UCODE_8__'
+let current = output(ctx, 'config-get-optional', ['NFQWS_OPT']);
             apply(ctx, kind == 'manager' ? replace_group(current, '', args[2]) : remove_flowseal(current));
             break;
         }
@@ -4210,10 +4550,7 @@ function dispatch(ctx, command, args) {
         arity(args, 3, 3);
         initialize_lists(ctx);
         for (let s in list) prepare_assets(ctx, kind, s.body, data);
-        let dir = tempdir();
-        try { write(dir + '/catalog', data.catalog); benchmark(ctx, [args[2], dir + '/catalog'], action == 'auto-best', kind); }
-        catch (e) { fs.unlink(dir + '/catalog'); fs.rmdir(dir); die(e.message); }
-        fs.unlink(dir + '/catalog'); fs.rmdir(dir);
+        benchmark(ctx, [args[2]], action == 'auto-best', kind, data);
         break;
     }
     case 'status': case 'doctor': case 'recover':
@@ -4227,7 +4564,7 @@ function dispatch(ctx, command, args) {
         break;
     case 'config':
         arity(args, 1, 3);
-        if (args[0] == 'show') { arity(args, 1, 1); print(read(ctx.config, ctx.max_file_bytes)); }
+        if (args[0] == 'show') { arity(args, 1, 1); print(cached(ctx, 'config-body', () => read(ctx.config, ctx.max_file_bytes))); }
         else if (args[0] == 'get') {
             arity(args, 2, 2);
             check(match(args[1], /^[A-Za-z][A-Za-z0-9_]*$/), 'неверное имя опции');
@@ -4300,7 +4637,9 @@ function package_phase(ctx, command, args) {
     let mode = null;
     if (command == 'install-upstream' || command == 'update-upstream') {
         arity(args, 0, 0);
-        if (release_install(ctx) == 'both') mode = 'enable';
+        let plan = release_install({ ...ctx, cache: null });
+        if (plan != 'none') invalidate(ctx);
+        if (plan == 'both') mode = 'enable';
     }
     else {
         if (command == 'remove') arity(args, 0, 0);
@@ -4308,9 +4647,12 @@ function package_phase(ctx, command, args) {
             check(match(fs.basename(file), /^(luci-app-)?zapret[_-][A-Za-z0-9_.+-]+\.(ipk|apk)$/), 'ожидается локальный пакет Zapret: ' + file);
             check(fs.stat(file)?.type == 'file', 'пакет не найден: ' + file);
         }
-        let before = package_versions(ctx).zapret;
+        let before_versions = package_versions({ ...ctx, cache: null });
+        let before = before_versions.zapret;
         run(ctx, 'package', [command, ...args]);
-        let after = package_versions(ctx).zapret;
+        let after_versions = package_versions({ ...ctx, cache: null });
+        let after = after_versions.zapret;
+        if (sprintf('%J', before_versions) != sprintf('%J', after_versions)) invalidate(ctx);
         if (command != 'remove' && after && after != before) mode = before ? 'keep' : 'enable';
     }
     if (mode == null) return 0;
@@ -4318,7 +4660,7 @@ function package_phase(ctx, command, args) {
     return backend(ctx, 'transaction', argv) == 0 ? 0 : 1;
 }
 
-function command_main(argv) {
+function command_main(argv, session) {
 try {
     // ucode defers handlers until a synchronous helper has finished. The supervisor
     // waits for that worker before restoring files, so helpers cannot race the rollback.
@@ -4335,7 +4677,17 @@ try {
     let command = shift(args) || 'help';
     if (command == 'help') { print(HELP); return 0; }
     if (command == 'version') { print(VERSION + '\n'); return 0; }
-    let ctx = settings(getenv('ZM_HOME'), file);
+    let ctx = session && (file == null || file == session.file) ? session : settings(getenv('ZM_HOME'), file);
+    if (command == 'backend-operation') {
+        arity(args, 3, 1024);
+        check(args[2] == 'zapret' && type(args[1]) == 'string' &&
+            (args[1] == '' || match(args[1], /^\/([A-Za-z0-9_. -]+\/)*[A-Za-z0-9_. -]*$/)) &&
+            !match(args[1], /(^|\/)\.\.?(\/|$)/), 'неверный корень backend');
+        ctx.root = args[1];
+        ctx.state = ctx.root + '/etc/zapret-manager';
+        ctx.base = ctx.root + '/opt/zapret';
+        ctx.config = ctx.root + '/etc/config/zapret';
+    }
     if ((command == 'manager-install' || command == 'manager-uninstall' || command == 'uninstall') && getenv('DESTDIR')) {
         let destination = getenv('DESTDIR');
         check(match(destination, /^\/[A-Za-z0-9_./ -]+$/) && !match(destination, /(^|\/)\.\.?(\/|$)/), 'неверный DESTDIR');
@@ -4351,12 +4703,7 @@ try {
             check(!getenv('ZM_TRANSACTION'), 'пакетная операция внутри транзакции запрещена');
             check(!fs.stat(ctx.root + '/tmp/zapret-manager.zapret.lock'), 'занято: выполняется другая операция');
             run(ctx, 'package', ['remove']);
-__JZM_JZM_UCODE_6__
-)
-export JZM_UCODE_6
-
-JZM_UCODE_7=$(cat <<'__JZM_JZM_UCODE_7__'
-return backend(ctx, 'transaction', [...(fs.stat(ctx.file) ? ['--config', ctx.file] : []), 'uninstall-finish', 'all']) == 0 ? 0 : 1;
+            return backend(ctx, 'transaction', [...(fs.stat(ctx.file) ? ['--config', ctx.file] : []), 'uninstall-finish', 'all']) == 0 ? 0 : 1;
         }
     }
     if (command == 'uninstall-finish') check(getenv('ZM_TRANSACTION'), 'внутренняя команда транзакции');
@@ -4367,7 +4714,9 @@ return backend(ctx, 'transaction', [...(fs.stat(ctx.file) ? ['--config', ctx.fil
         arity(args, 3, 3);
         editable(ctx, args[1], args[2]);
     }
-    let readonly = index(['status', 'doctor', 'test', 'recover', 'blockcheck', 'manager-check'], command) != -1 ||
+    let readonly = (command == 'backend-operation' &&
+        (index(['status', 'doctor', 'config-read', 'config-read-optional', 'hosts-read-stdout', 'settle'], args[0]) != -1 ||
+         (args[0] == 'network' && args[3] == 'status'))) || index(['status', 'doctor', 'test', 'recover', 'blockcheck', 'manager-check'], command) != -1 ||
         (command == 'network' && args[0] == 'status') ||
         (command == 'devices' && args[0] == 'list') ||
         (command == 'source' && index(['list', 'show'], args[0]) != -1) ||
@@ -4399,11 +4748,11 @@ catch (e) {
     warn('jzm: ' + e.message + '\n');
     exit(1);
 }
-__JZM_JZM_UCODE_7__
+__JZM_JZM_UCODE_8__
 )
-export JZM_UCODE_7
+export JZM_UCODE_8
 
-JZM_PARTS=7
+JZM_PARTS=8
 export JZM_PARTS
 # Source is compiled in memory. Separate environment values stay below Linux's
 # per-argument limit; stdin remains available to the terminal menu and blockcheck.

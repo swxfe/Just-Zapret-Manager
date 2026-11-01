@@ -27,10 +27,10 @@ function heredoc(name, body) {
 let header = replace(content('tools/header.sh'), /@VERSION@/g, VERSION);
 let footer = content('tools/footer.sh');
 let backend = shell_body('common') + '\n';
-for (let name in ['transaction', 'packages', 'network', 'uninstall'])
+for (let name in ['transaction', 'packages'])
     backend += '\njzm_' + name + '() {\n' + shell_body(name) + '\n}\n';
 let dispatch = shell_body('backend');
-for (let name in ['transaction', 'packages', 'network', 'uninstall'])
+for (let name in ['transaction', 'packages'])
     dispatch = replace(dispatch,
         'exec /bin/sh "$(dirname "$0")/' + name + '.sh" "$action" "$root" "$profile" "$@"',
         'jzm_' + name + ' "$@"');
@@ -38,7 +38,7 @@ backend += '\n# ---- system operation dispatcher ----\n' + dispatch;
 
 let strategies = content('data/strategies.txt');
 if (match(strategies, /[`$\\]/)) die('bundle: небезопасный символ в шаблоне стратегий');
-let program = "import * as fs from 'fs';\n";
+let program = "import * as fs from 'fs';\nimport * as uci from 'uci';\nimport * as ubus from 'ubus';\nimport { sha256 } from 'digest';\nimport * as uclient from 'uclient';\nimport * as uloop from 'uloop';\n";
 program += 'const EMBEDDED_STRATEGIES = `\n' + strategies + '`;\n';
 let config = content('data/manager.json');
 if (type(json(config)) != 'object') die('bundle: manager.json должен содержать объект');
@@ -52,7 +52,7 @@ for (let file in ['sources.json', 'network.json', 'google.txt', 'exclude.txt', '
 program += "EMBEDDED_DATA['strategies.txt'] = EMBEDDED_STRATEGIES;\n";
 program += 'const EMBEDDED_HEADER = ' + sprintf('%J', header) + ';\n';
 program += 'const EMBEDDED_FOOTER = ' + sprintf('%J', footer) + ';\n';
-for (let file in ['resources', 'common', 'settings', 'strategies', 'domains', 'devices', 'applied', 'status', 'sources', 'manager', 'menu']) {
+for (let file in ['resources', 'cache', 'platform', 'http', 'mutations', 'common', 'settings', 'strategies', 'domains', 'devices', 'applied', 'status', 'sources', 'manager', 'menu']) {
     let body = module_body('src/lib/' + file + '.uc');
     if (file == 'resources') {
         for (let kind in ['data', 'config', 'header', 'footer'])

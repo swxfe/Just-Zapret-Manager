@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import { sha256 } from 'digest';
+import { cached } from 'cache';
 import { check, read } from 'common';
 import { strategy_key, profile_group } from 'strategies';
 
@@ -17,17 +19,11 @@ export function normalize_options(body) {
 export function sha256_text(text) {
     check(type(text) == 'string' && length(text) <= 65536 && index(text, '\x00') == -1, 'неверные данные для SHA256');
     for (let entry in digest_cache) if (entry.text == text) return entry.digest;
-    // Quote every byte, including user-supplied apostrophes; printf never interprets data as code.
-    let quoted = "'" + replace(text, /'/g, "'\\''") + "'";
-    check(length(quoted) < 100000, 'слишком большие данные для SHA256');
-    let proc = fs.popen("printf '%s' " + quoted + ' | sha256sum', 'r');
-    check(proc != null, 'не удалось запустить sha256sum');
-    let reply = proc.read(256) || '', rc = proc.close();
-    let digest = match(reply, /^([a-f0-9]+)[ \t]+[*]?-/);
-    check(rc == 0 && digest && length(digest[1]) == 64, 'не удалось вычислить SHA256; нужна команда sha256sum');
+    let digest = sha256(text);
+    check(type(digest) == 'string' && length(digest) == 64, 'не удалось вычислить SHA256');
     if (length(digest_cache) == 4) shift(digest_cache);
-    push(digest_cache, { text, digest: digest[1] });
-    return digest[1];
+    push(digest_cache, { text, digest });
+    return digest;
 };
 
 export function strategy_hash(body) {
@@ -55,7 +51,7 @@ export function validate_applied(state) {
 
 export function read_applied(ctx) {
     let path = ctx.state + '/state.json';
-    return fs.stat(path) ? validate_applied(json(read(path, 65536))) : null;
+    return cached(ctx, 'applied', () => fs.stat(path) ? validate_applied(json(read(path, 65536))) : null);
 };
 
 export function applied_names(state) {

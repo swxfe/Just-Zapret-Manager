@@ -10,7 +10,7 @@ umask 077
 
 if ! command -v curl >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1 ||
    ! command -v uci >/dev/null 2>&1 ||
-   ! ucode -S -e 'import * as fs from "fs";' >/dev/null 2>&1; then
+   ! ucode -S -e 'import * as fs from "fs"; import * as uci from "uci"; import * as ubus from "ubus"; import * as digest from "digest"; import * as uclient from "uclient"; import * as uloop from "uloop";' >/dev/null 2>&1; then
     target_dir=/overlay
     [ -d "$target_dir" ] || target_dir=/
     available=$(df -Pk "$target_dir" | awk 'NR==2 {print $4}')
@@ -22,10 +22,10 @@ if ! command -v curl >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1 ||
     }
     if command -v apk >/dev/null 2>&1; then
         apk update
-        apk add ucode ucode-mod-fs uci curl ca-bundle unzip
+        apk add ucode ucode-mod-fs ucode-mod-uci ucode-mod-ubus ucode-mod-digest ucode-mod-uclient ucode-mod-uloop uci curl ca-bundle unzip
     elif command -v opkg >/dev/null 2>&1; then
         opkg update
-        opkg install ucode ucode-mod-fs uci curl ca-bundle unzip
+        opkg install ucode ucode-mod-fs ucode-mod-uci ucode-mod-ubus ucode-mod-digest ucode-mod-uclient ucode-mod-uloop uci curl ca-bundle unzip
     else
         printf '%s\n' 'Не найден пакетный менеджер apk/opkg.' >&2; exit 1
     fi

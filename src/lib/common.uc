@@ -1,20 +1,24 @@
 import * as fs from 'fs';
 import { resource } from 'resources';
+import { config_option, host_path, native_running, executable } from 'platform';
+import { native_send, native_action } from 'mutations';
+import { cached, invalidate } from 'cache';
+import { http_request } from 'http';
 
 export function check(condition, message) {
     if (!condition) die(message);
 };
 
 export function tempdir() {
-    // The fs.mkdtemp API is absent from ucode shipped with OpenWrt 24.10.
-    // This fixed command has no caller-provided arguments to interpolate.
-    let proc = fs.popen('mktemp -d /tmp/zm-io-XXXXXX', 'r');
-    check(proc != null, 'невозможно запустить mktemp');
-    let path = trim(proc.read('all') || '');
-    let rc = proc.close();
-    check(rc == 0 && match(path, /^\/tmp\/zm-io-[A-Za-z0-9]+$/),
-          'невозможно создать временный каталог');
-    return path;
+    // mkdir is the exclusive allocation primitive available on every supported ucode.
+    for (let attempt = 0; attempt < 8; attempt++) {
+        let token = trim(fs.readfile('/proc/sys/kernel/random/uuid', 64) || '');
+        check(match(token, /^[a-f0-9-]{36}$/), 'не удалось получить случайное имя');
+        let path = '/tmp/zm-io-' + token;
+        if (fs.mkdir(path, 0700)) return path;
+        check(fs.lstat(path) != null, 'невозможно создать временный каталог: ' + fs.error());
+    }
+    die('невозможно создать уникальный временный каталог');
 };
 
 export function read(path, limit) {
@@ -34,7 +38,53 @@ function backend_command(ctx, action, args) {
     return cmd;
 }
 
+function safety_operation(ctx, action, args) {
+    let rc = system(backend_command(ctx, action, args));
+    check(rc == 0, sprintf('%s: код завершения %d', action, rc));
+}
+
 export function backend(ctx, action, args) {
+    args = args || [];
+    if (native_action(ctx, action, args, safety_operation)) return 0;
+    if (action == 'probe') {
+        try {
+            let reply = http_request(ctx, args[2], ctx.max_file_bytes, true, true);
+            return reply.status >= 200 && reply.status < 300 ? 0 : 22;
+        }
+        catch (e) { warn(e.message + '\n'); return 28; }
+    }
+    if (action == 'status') {
+        if (!fs.stat(ctx.root + '/etc/init.d/zapret')) print('zapret: not installed\n');
+        else {
+            let reply = native_running(ctx), running = false;
+            check(type(reply) == 'object', 'не удалось проверить состояние сервиса');
+            if (reply.zapret != null) {
+                check(type(reply.zapret.instances) == 'object', 'неверный ответ procd');
+                for (let name, instance in reply.zapret.instances) if (instance.running == true) running = true;
+            }
+            print(running ? 'zapret: running\n' : 'zapret: stopped\n');
+        }
+        return 0;
+    }
+    if (action == 'doctor') {
+        let errors = 0;
+        for (let name in ['ucode', 'uci', 'curl', 'mktemp']) {
+            let found = executable(name) != null;
+            printf('%s %s\n', found ? 'OK' : 'MISSING', name);
+            if (!found) errors++;
+        }
+        if (!executable('opkg') && !executable('apk')) { print('MISSING opkg/apk\n'); errors++; }
+        for (let path in [ctx.config, ctx.root + '/etc/init.d/zapret'])
+            if (!fs.stat(path)) { printf('MISSING %s\n', path); errors++; }
+        return errors ? 1 : 0;
+    }
+    if (action == 'transaction') {
+        let rc = system(['env', 'JZM_REPORT_CHANGE=1', ...backend_command(ctx, action, args)]);
+        if (rc == 10) { invalidate(ctx); return 0; }
+        // An incomplete rollback is not the state represented by the old cache.
+        if (rc != 0 && fs.stat(ctx.root + '/tmp/zapret-manager.zapret.lock/ready')) invalidate(ctx);
+        return rc;
+    }
     return system(backend_command(ctx, action, args));
 };
 
@@ -44,40 +94,28 @@ export function run(ctx, action, args) {
 };
 
 export function output(ctx, action, args) {
-    let stream = { 'config-get': 'config-read', 'config-get-optional': 'config-read-optional',
-                   'hosts-read': 'hosts-read-stdout' }[action];
-    if (stream != null) {
-        let cmd = backend_command(ctx, stream, args);
-        let quoted = map(cmd, (arg) => "'" + replace(arg, /'/g, "'\\''") + "'");
-        let proc = fs.popen(join(' ', quoted), 'r');
-        check(proc != null, 'не удалось запустить ' + action);
-        let value = '', oversized = false;
-        // Drain an oversized result before close, keeping memory bounded and avoiding a full pipe deadlock.
-        for (let chunk = proc.read(4096); chunk != null && length(chunk); chunk = proc.read(4096)) {
-            if (!oversized) value += chunk;
-            if (length(value) > ctx.max_file_bytes) oversized = true;
-        }
-        let rc = proc.close();
-        check(rc == 0, sprintf('%s: код завершения %d', action, rc));
-        check(!oversized, 'слишком большой результат ' + action);
-        check(index(value, '\x00') == -1, 'NUL в текстовом результате: ' + action);
-        return value;
+    if (action == 'config-get' || action == 'config-get-optional')
+        return config_option(ctx, args[0], action == 'config-get-optional');
+    if (action == 'hosts-read') {
+        let path = host_path(ctx, args[0]);
+        return cached(ctx, 'hosts:' + args[0], () => fs.stat(path) ? read(path, ctx.max_file_bytes) : '');
     }
-    // Capture through a private directory; arguments never pass through a shell parser.
-    let dir = tempdir();
-    let value;
-    try {
-        run(ctx, action, [dir + '/result', ...(args || [])]);
-        value = read(dir + '/result', ctx.max_file_bytes);
+    if (action == 'architecture') {
+        let body = read(ctx.root + '/etc/openwrt_release', 65536);
+        let arch = match(body, /(^|\n)DISTRIB_ARCH='([A-Za-z0-9_-]+)'(\n|$)/);
+        check(arch != null, 'не удалось определить архитектуру OpenWrt');
+        return arch[2] + '\n';
     }
-    catch (e) {
-        fs.unlink(dir + '/result');
-        fs.rmdir(dir);
-        die(e.message);
+    if (action == 'download' || action == 'github-download') {
+        let reply;
+        try { reply = http_request(ctx, args[3], +args[2], false); }
+        catch (e) { die(action + ': код завершения 28: ' + e.message); }
+        if (action == 'github-download')
+            return reply.status + '\n' + (reply.headers['x-ratelimit-remaining'] || '') + '\n' + reply.body;
+        check(reply.status >= 200 && reply.status < 300, 'ошибка HTTP ' + reply.status);
+        return reply.body;
     }
-    fs.unlink(dir + '/result');
-    fs.rmdir(dir);
-    return value;
+    die('неизвестная операция чтения: ' + action);
 };
 
 export function write(path, text) {
@@ -85,25 +123,11 @@ export function write(path, text) {
 };
 
 export function send(ctx, action, args, text) {
-    let dir = tempdir();
-    try {
-        write(dir + '/input', text);
-        run(ctx, action, [dir + '/input', ...(args || [])]);
-    }
-    catch (e) {
-        fs.unlink(dir + '/input');
-        fs.rmdir(dir);
-        die(e.message);
-    }
-    fs.unlink(dir + '/input');
-    fs.rmdir(dir);
+    check(native_send(ctx, action, args || [], text, safety_operation), 'неизвестная операция записи: ' + action);
 };
 
 export function invoke(ctx, args) {
-    let cmd = getenv('JZM_BOOTSTRAP') ?
-        ['/bin/sh', '-c', 'JZM_MODE=command exec ucode -S -e "$JZM_BOOTSTRAP" -- "$@"', 'jzm-command'] :
-        ['/bin/sh', '-c', 'JZM_MODE=command exec /bin/sh "$@"', 'jzm-command', ctx.home + '/src/launcher.sh'];
-    return system([...cmd, ...(fs.stat(ctx.file) ? ['--config', ctx.file] : []), ...args]);
+    return backend(ctx, 'transaction', [...(fs.stat(ctx.file) ? ['--config', ctx.file] : []), ...args]);
 };
 
 export function target_text(ctx, file) {

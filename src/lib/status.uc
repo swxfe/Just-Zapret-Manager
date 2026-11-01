@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import { cached } from 'cache';
+import { config_option, native_running } from 'platform';
 import { check, read } from 'common';
 import { normalize_options, strategy_hash, read_applied, applied_names, applied_catalog_hash, applied_status } from 'applied';
 import { catalog, parse_catalog, strategy_sections, strategy_key, strategy_group, profile_group } from 'strategies';
@@ -24,29 +26,42 @@ export function parse_packages(body, format) {
 };
 
 export function package_versions(ctx) {
-    for (let item in [['/lib/apk/db/installed', 'apk'], ['/usr/lib/opkg/status', 'opkg']]) {
-        let path = ctx.root + item[0];
-        if (fs.stat(path)) return parse_packages(read(path, 8388608), item[1]);
-    }
-    return {};
+    return cached(ctx, 'packages', () => {
+        for (let item in [['/lib/apk/db/installed', 'apk'], ['/usr/lib/opkg/status', 'opkg']]) {
+            let path = ctx.root + item[0], st = fs.stat(path);
+            if (st == null) continue;
+            check(st.type == 'file' && st.size <= 8388608, 'слишком большая пакетная база');
+            let input = fs.open(path, 'r');
+            check(input != null, 'не удалось открыть пакетную базу');
+            let pending = '', result = {}, bytes = 0;
+            try {
+                for (let chunk = input.read(32768); chunk != null && length(chunk); chunk = input.read(32768)) {
+                    bytes += length(chunk);
+                    check(bytes <= 8388608, 'слишком большая пакетная база');
+                    let records = split(pending + replace(chunk, /\r/g, ''), /\n\n+/);
+                    pending = pop(records);
+                    check(length(pending) <= 65536, 'слишком большая запись пакетной базы');
+                    // Native chunk splitting skips descriptions without a per-line VM loop.
+                    for (let name, version in parse_packages(join('\n\n', records), item[1])) result[name] = version;
+                }
+                check(bytes == st.size, 'ошибка чтения пакетной базы');
+                for (let name, version in parse_packages(pending, item[1])) result[name] = version;
+            }
+            catch (e) { input.close(); die(e.message); }
+            input.close();
+            return result;
+        }
+        return {};
+    });
 };
 
 export function configured_strategy(ctx) {
-    if (!fs.stat(ctx.config)) return '';
-    // root accepts neither quotes nor shell metacharacters in settings().
-    let uci = "uci -c '" + ctx.root + "/etc/config' -q get ";
-    let proc = fs.popen(uci + "'zapret.@main[0].NFQWS_OPT' 2>/dev/null || " +
-        uci + "'zapret.@main[0]' >/dev/null 2>&1", 'r');
-    check(proc != null, 'не удалось прочитать стратегию UCI');
-    let body = '';
-    while (true) {
-        let chunk = proc.read(4096);
-        if (chunk == null || !length(chunk)) break;
-        body += chunk;
-        if (length(body) > 65536) { proc.close(); die('слишком большая стратегия UCI'); }
-    }
-    check(proc.close() == 0, 'не удалось прочитать NFQWS_OPT');
-    return body;
+    return cached(ctx, 'configured-strategy', () => {
+        if (!fs.stat(ctx.config)) return '';
+        let body = config_option(ctx, 'NFQWS_OPT', true);
+        check(length(body) <= 65536, 'слишком большая стратегия UCI');
+        return body;
+    });
 };
 
 export function normalized_strategy(body) {
@@ -55,12 +70,14 @@ export function normalized_strategy(body) {
 
 export function inspect_strategy(body, list) {
     let sections = strategy_sections(body), references = [], by_name = {}, overrides = {};
-    let wanted = map(sections, (s) => strategy_key(s.label));
+    let wanted = {};
+    for (let section in sections) wanted[strategy_key(section.label)] = true;
     let labelled = length(filter(sections, (s) => s.label == null)) == 0;
     for (let candidate in list) {
         let name = strategy_key(candidate.name);
-        if (by_name[name] || (labelled && index(wanted, name) == -1)) continue;
-        let ref = { name, body: normalized_strategy(candidate.body) };
+        if (by_name[name] || (labelled && !wanted[name])) continue;
+        let normalized = normalized_strategy(candidate.body);
+        let ref = { name, body: normalized, parts: split(normalized, '--new\n') };
         by_name[name] = ref; push(references, ref);
     }
     // A named replacement accounts for precisely the profiles removed by the editor.
@@ -86,7 +103,7 @@ export function inspect_strategy(body, list) {
         for (let i = 0; i < length(blocks);) {
             let found = null, count = 0;
             for (let ref in references) {
-                let parts = split(ref.body, '--new\n');
+                let parts = ref.parts;
                 if (!length(ref.body) || length(parts) <= count || i + length(parts) > length(blocks)) continue;
                 if (join('--new\n', slice(blocks, i, i + length(parts))) == ref.body) { found = ref; count = length(parts); }
             }
@@ -115,13 +132,13 @@ export function reference_catalog(ctx, wanted) {
     for (let kind in ['flowseal', 'manager']) {
         let path = ctx.state + '/' + kind + '.json';
         if (!fs.stat(path)) continue;
-        try { list = [...list, ...parse_catalog(ctx, json(read(path, ctx.max_file_bytes)).catalog, wanted)]; }
+        try { list = [...list, ...parse_catalog(ctx, cached(ctx, 'source-document:' + path, () => json(read(path, ctx.max_file_bytes))).catalog, wanted)]; }
         catch (e) { /* Invalid cached presets cannot hide the actual configuration. */ }
     }
     return [...list, ...catalog(ctx, null, wanted)];
 };
 
-export function strategy_state(ctx, summary_only) {
+function compute_strategy_state(ctx, summary_only) {
     let body = configured_strategy(ctx), state = null;
     if (!length(normalize_options(body))) return { summary: 'не выбрана', sections: [] };
     try { state = read_applied(ctx); } catch (e) { /* An invalid baseline cannot establish provenance. */ }
@@ -135,6 +152,11 @@ export function strategy_state(ctx, summary_only) {
         [...map(raw, (s) => strategy_key(s.label)), ...applied_names(state)];
     let list = reference_catalog(ctx, wanted);
     return { summary: identify_strategy(body, list, state), sections: inspect_strategy(body, list) };
+};
+
+export function strategy_state(ctx, summary_only) {
+    return cached(ctx, summary_only ? 'strategy-summary' : 'strategy-sections',
+        () => compute_strategy_state(ctx, summary_only));
 };
 
 export function group_state(sections, group) {
@@ -160,17 +182,10 @@ export function procd_running(reply) {
 };
 
 export function service_running(ctx) {
-    let ubus = ctx.root + '/bin/ubus';
-    if (fs.stat(ubus)) {
-        let proc = fs.popen("'" + ubus + "' -t 1 call service list '{\"name\":\"zapret\"}' 2>/dev/null", 'r');
-        if (proc == null) return null;
-        let reply = proc.read(65537), rc = proc.close();
-        if (rc != 0 || reply == null || length(reply) > 65536) return null;
-        try { return procd_running(json(reply)); } catch (e) { return null; }
-    }
-    let init = ctx.root + '/etc/init.d/zapret';
-    return fs.stat(init) != null && system(['/bin/sh', '-c',
-        'exec "$1" running >/dev/null 2>&1', 'jzm-status', init]) == 0;
+    return cached(ctx, 'service-running', () => {
+        try { return procd_running(native_running(ctx)); }
+        catch (e) { return null; }
+    });
 };
 
 export function zapret_status(ctx) {

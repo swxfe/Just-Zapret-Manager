@@ -1,7 +1,8 @@
 import * as fs from 'fs';
+import { session_cache, cached } from 'cache';
 import { check, invoke } from 'common';
 import { VERSION } from 'resources';
-import { update_status, check_update, apply_update, start_update_check } from 'manager';
+import { update_status, check_update, apply_update } from 'manager';
 import { strategy_key, strategy_group, strategy_title, strategy_order } from 'strategies';
 import { source_data } from 'sources';
 import { device_list, excluded } from 'devices';
@@ -9,10 +10,11 @@ import { zapret_status, strategy_state, group_state } from 'status';
 
 let ended = false;
 
+let color_enabled = null;
 function paint(code, text) {
-    let enabled = getenv('JZM_COLOR') == 'always' || (fs.stdout.isatty() &&
+    if (color_enabled == null) color_enabled = getenv('JZM_COLOR') == 'always' || (fs.stdout.isatty() &&
         getenv('NO_COLOR') == null && getenv('TERM') != 'dumb');
-    return enabled ? '\x1b[' + code + 'm' + text + '\x1b[0m' : text;
+    return color_enabled ? '\x1b[' + code + 'm' + text + '\x1b[0m' : text;
 }
 
 function menu_line(key, text) { printf('  %s %s\n', paint('36;1', key + '.'), text); }
@@ -54,7 +56,7 @@ function choice(title, labels) {
 let menu_executor = null;
 
 function command(ctx, args) {
-    let rc = menu_executor ? menu_executor([...(fs.stat(ctx.file) ? ['--config', ctx.file] : []), ...args]) : invoke(ctx, args);
+    let rc = menu_executor ? menu_executor([...(cached(ctx, 'settings-file-exists', () => fs.stat(ctx.file) != null) ? ['--config', ctx.file] : []), ...args], ctx) : invoke(ctx, args);
     check(rc == 0, 'действие не выполнено; причина указана выше');
 }
 
@@ -154,8 +156,11 @@ function compose_menu(ctx) {
         try { available = source_data(ctx, 'manager').strategies; } catch (e) { /* Picker offers catalog repair. */ }
         screen('Собрать стратегию'); current_strategy(state);
         for (let i = 0; i < length(groups); i++) {
-            let names = filter(available, (s) => strategy_group(s.name) == groups[i]);
-            sort(names, strategy_order);
+            let names = cached(ctx, 'menu-group:' + groups[i], () => {
+                let presets = filter(available, (s) => strategy_group(s.name) == groups[i]);
+                sort(presets, strategy_order);
+                return presets;
+            });
             let hint = !length(names) ? 'нет в каталоге' : names[0].name + (length(names) > 1 ? '–' + names[-1].name : '');
             let value = group_state(state.sections, groups[i]);
             menu_line(i + 1, labels[i] + '  ' + paint(value == '[отключено]' ? '2' : '35;1', value) + '  ' + paint('2', '(' + hint + ')'));
@@ -232,7 +237,7 @@ function strategy_menu(ctx) {
 
 function install_menu(ctx) {
     while (!ended) {
-        let state = zapret_status(ctx);
+        let state = cached(ctx, 'zapret-status', () => zapret_status(ctx));
         let c = choice('Zapret · ' + (state.installed ? state.version : 'не установлен'),
             state.installed ? ['Обновить Zapret', 'Удалить Zapret', 'Удалить только JZM', 'Удалить всё: JZM + Zapret + LuCI'] :
                 ['Установить Zapret', 'Удалить только JZM', 'Удалить всё: JZM + Zapret + LuCI']);
@@ -368,13 +373,14 @@ function backup_menu(ctx) {
 }
 
 export function menu(initial, executor) {
+    ended = false;
+    session_cache(initial);
     menu_executor = executor;
-    let ctx = initial, update_started = false;
+    let ctx = initial;
     while (!ended) {
         screen('just-zapret-manager ' + VERSION);
         printf('Менеджер: %s\nПоследняя версия менеджера: %s\n', paint('35;1', VERSION), update_status(ctx).label);
-        if (!update_started) { start_update_check(ctx); update_started = true; }
-        let state = zapret_status(ctx);
+        let state = cached(ctx, 'zapret-status', () => zapret_status(ctx));
         printf('\nZapret: %s\n', state.installed ? paint('32;1', 'установлен · ' + state.version) : paint('31;1', 'не установлен'));
         printf('Сервис: %s\n', paint(state.running ? '32;1' : '33;1', state.running == null ? 'не удалось проверить' : (state.running ? 'запущен' : 'остановлен')));
         printf('%s: %s\n\n', state.running == false ? 'Выбранные стратегии (не запущены)' : 'Стратегии', paint('35', state.strategy));

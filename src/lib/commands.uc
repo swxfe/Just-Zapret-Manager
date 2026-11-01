@@ -1,8 +1,9 @@
 import { check_update, cache_update, install_manager, apply_update } from 'manager';
 import { resource, VERSION } from 'resources';
 import * as fs from 'fs';
-import { check, read, backend, run, output, send, tempdir, write, target_text } from 'common';
+import { check, read, backend, run, output, send, target_text } from 'common';
 import { settings } from 'settings';
+import { cached, invalidate } from 'cache';
 import { catalog, compose, compose_bodies, preserve_body, label_strategy, replace_group, remove_flowseal, strategy_key, strategy_sections } from 'strategies';
 import { domains, urls, validate_list_snapshot } from 'domains';
 import { source_data, refresh_source, prepare_assets, release_install } from 'sources';
@@ -84,12 +85,14 @@ function apply(ctx, body, transient) {
     for (let proto in ['TCP', 'UDP']) {
         let option = 'NFQWS_PORTS_' + proto;
         let ports = trim(output(ctx, 'config-get-optional', [option]));
-        let previous = ports;
-        let items = length(ports) ? split(ports, ',') : [];
+        let previous = ports, seen_ports = {};
+        let items = [];
+        for (let port in (length(ports) ? split(ports, ',') : []))
+            if (!exists(seen_ports, port)) { seen_ports[port] = true; push(items, port); }
         let filter_pattern = regexp('^--filter-' + lc(proto) + '=([0-9,-]+)$');
         for (let line in split(body, '\n')) {
             let m = match(line, filter_pattern);
-            if (m) for (let port in split(m[1], ',')) if (index(items, port) == -1) push(items, port);
+            if (m) for (let port in split(m[1], ',')) if (!exists(seen_ports, port)) { seen_ports[port] = true; push(items, port); }
         }
         if (length(items)) {
             ports = join(',', items);
@@ -128,11 +131,11 @@ function probe(ctx, targets) {
     return ok;
 }
 
-function benchmark(ctx, args, keep, source_kind) {
+function benchmark(ctx, args, keep, source_kind, prepared) {
     arity(args, 1, 2);
     let targets = urls(target_text(ctx, args[0]), ctx.max_urls);
     let list = [], results = [];
-    for (let s in catalog(ctx, args[1])) {
+    for (let s in (prepared?.strategies || catalog(ctx, args[1]))) {
         try { dependencies(ctx, s.body); push(list, s); }
         catch (e) { push(results, { name: s.name, skipped: e.message }); }
     }
@@ -154,7 +157,7 @@ function benchmark(ctx, args, keep, source_kind) {
     if (applied) {
         let body = label_strategy(best.name, filter(list, (s) => s.name == best.name)[0].body);
         initialize_lists(ctx);
-        if (source_kind != null) prepare_assets(ctx, source_kind, body);
+        if (source_kind != null) prepare_assets(ctx, source_kind, body, prepared);
         apply(ctx, body);
     }
     printf('%J\n', { control, total: length(targets), results, best, applied });
@@ -186,8 +189,17 @@ function host_command(ctx, args) {
         arity(extra, 1, ctx.max_domains);
         let old = domains(output(ctx, 'hosts-read', [kind]), ctx.max_domains);
         let change = domains(join('\n', extra), ctx.max_domains);
-        items = action == 'add' ? domains(join('\n', [...old, ...change]), ctx.max_domains) :
-            filter(old, (name) => index(change, name) == -1);
+        let names = {};
+        if (action == 'add') {
+            for (let name in old) names[name] = true;
+            for (let name in change) names[name] = true;
+            check(length(names) <= ctx.max_domains, 'превышен лимит доменов');
+            items = sort(keys(names));
+        }
+        else {
+            for (let name in change) names[name] = true;
+            items = filter(old, (name) => !exists(names, name));
+        }
     }
     let body = length(items) ? join('\n', items) + '\n' : '';
     check(length(body) <= ctx.max_file_bytes, 'список превышает лимит размера');
@@ -263,6 +275,24 @@ function dispatch(ctx, command, args) {
     // Run after acquiring the transaction lock, before downloads or configuration writes.
     if (changes_strategy && !approve_strategy_change(ctx)) { print('\nДействие отменено.\n'); return; }
     switch (command) {
+    case 'backend-operation': {
+        let action = args[0], values = slice(args, 3);
+        if (index(['state-write', 'source-write', 'hosts-write', 'config-restore', 'device-hook-write',
+                   'manager-config-init', 'backup-write'], action) != -1) {
+            check(length(values), 'не указан файл операции');
+            send(ctx, action, slice(values, 1), read(values[0], ctx.max_file_bytes));
+        }
+        else if (action == 'config-read' || action == 'config-read-optional')
+            print(output(ctx, action == 'config-read' ? 'config-get' : 'config-get-optional', values));
+        else if (action == 'hosts-read-stdout') print(output(ctx, 'hosts-read', values));
+        else {
+            check(index(['config-set', 'service', 'network', 'resource-write', 'manager-install',
+                'manager-uninstall', 'strategy-state-clear', 'schedule', 'uninstall-cleanup', 'status', 'doctor', 'settle'], action) != -1,
+                'неизвестная нативная операция: ' + action);
+            run(ctx, action, values);
+        }
+        break;
+    }
     case 'uninstall':
         arity(args, 1, 1);
         check(args[0] == 'manager', 'полное удаление выполняется через пакетную фазу');
@@ -377,10 +407,7 @@ function dispatch(ctx, command, args) {
         arity(args, 3, 3);
         initialize_lists(ctx);
         for (let s in list) prepare_assets(ctx, kind, s.body, data);
-        let dir = tempdir();
-        try { write(dir + '/catalog', data.catalog); benchmark(ctx, [args[2], dir + '/catalog'], action == 'auto-best', kind); }
-        catch (e) { fs.unlink(dir + '/catalog'); fs.rmdir(dir); die(e.message); }
-        fs.unlink(dir + '/catalog'); fs.rmdir(dir);
+        benchmark(ctx, [args[2]], action == 'auto-best', kind, data);
         break;
     }
     case 'status': case 'doctor': case 'recover':
@@ -394,7 +421,7 @@ function dispatch(ctx, command, args) {
         break;
     case 'config':
         arity(args, 1, 3);
-        if (args[0] == 'show') { arity(args, 1, 1); print(read(ctx.config, ctx.max_file_bytes)); }
+        if (args[0] == 'show') { arity(args, 1, 1); print(cached(ctx, 'config-body', () => read(ctx.config, ctx.max_file_bytes))); }
         else if (args[0] == 'get') {
             arity(args, 2, 2);
             check(match(args[1], /^[A-Za-z][A-Za-z0-9_]*$/), 'неверное имя опции');
@@ -467,7 +494,9 @@ function package_phase(ctx, command, args) {
     let mode = null;
     if (command == 'install-upstream' || command == 'update-upstream') {
         arity(args, 0, 0);
-        if (release_install(ctx) == 'both') mode = 'enable';
+        let plan = release_install({ ...ctx, cache: null });
+        if (plan != 'none') invalidate(ctx);
+        if (plan == 'both') mode = 'enable';
     }
     else {
         if (command == 'remove') arity(args, 0, 0);
@@ -475,9 +504,12 @@ function package_phase(ctx, command, args) {
             check(match(fs.basename(file), /^(luci-app-)?zapret[_-][A-Za-z0-9_.+-]+\.(ipk|apk)$/), 'ожидается локальный пакет Zapret: ' + file);
             check(fs.stat(file)?.type == 'file', 'пакет не найден: ' + file);
         }
-        let before = package_versions(ctx).zapret;
+        let before_versions = package_versions({ ...ctx, cache: null });
+        let before = before_versions.zapret;
         run(ctx, 'package', [command, ...args]);
-        let after = package_versions(ctx).zapret;
+        let after_versions = package_versions({ ...ctx, cache: null });
+        let after = after_versions.zapret;
+        if (sprintf('%J', before_versions) != sprintf('%J', after_versions)) invalidate(ctx);
         if (command != 'remove' && after && after != before) mode = before ? 'keep' : 'enable';
     }
     if (mode == null) return 0;
@@ -485,7 +517,7 @@ function package_phase(ctx, command, args) {
     return backend(ctx, 'transaction', argv) == 0 ? 0 : 1;
 }
 
-export function command_main(argv) {
+export function command_main(argv, session) {
 try {
     // ucode defers handlers until a synchronous helper has finished. The supervisor
     // waits for that worker before restoring files, so helpers cannot race the rollback.
@@ -502,7 +534,17 @@ try {
     let command = shift(args) || 'help';
     if (command == 'help') { print(HELP); return 0; }
     if (command == 'version') { print(VERSION + '\n'); return 0; }
-    let ctx = settings(getenv('ZM_HOME'), file);
+    let ctx = session && (file == null || file == session.file) ? session : settings(getenv('ZM_HOME'), file);
+    if (command == 'backend-operation') {
+        arity(args, 3, 1024);
+        check(args[2] == 'zapret' && type(args[1]) == 'string' &&
+            (args[1] == '' || match(args[1], /^\/([A-Za-z0-9_. -]+\/)*[A-Za-z0-9_. -]*$/)) &&
+            !match(args[1], /(^|\/)\.\.?(\/|$)/), 'неверный корень backend');
+        ctx.root = args[1];
+        ctx.state = ctx.root + '/etc/zapret-manager';
+        ctx.base = ctx.root + '/opt/zapret';
+        ctx.config = ctx.root + '/etc/config/zapret';
+    }
     if ((command == 'manager-install' || command == 'manager-uninstall' || command == 'uninstall') && getenv('DESTDIR')) {
         let destination = getenv('DESTDIR');
         check(match(destination, /^\/[A-Za-z0-9_./ -]+$/) && !match(destination, /(^|\/)\.\.?(\/|$)/), 'неверный DESTDIR');
@@ -529,7 +571,9 @@ try {
         arity(args, 3, 3);
         editable(ctx, args[1], args[2]);
     }
-    let readonly = index(['status', 'doctor', 'test', 'recover', 'blockcheck', 'manager-check'], command) != -1 ||
+    let readonly = (command == 'backend-operation' &&
+        (index(['status', 'doctor', 'config-read', 'config-read-optional', 'hosts-read-stdout', 'settle'], args[0]) != -1 ||
+         (args[0] == 'network' && args[3] == 'status'))) || index(['status', 'doctor', 'test', 'recover', 'blockcheck', 'manager-check'], command) != -1 ||
         (command == 'network' && args[0] == 'status') ||
         (command == 'devices' && args[0] == 'list') ||
         (command == 'source' && index(['list', 'show'], args[0]) != -1) ||
