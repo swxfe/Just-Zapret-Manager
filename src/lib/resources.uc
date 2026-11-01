@@ -2,7 +2,7 @@ import * as fs from 'fs';
 
 let resource_cache = {};
 
-export const VERSION = '0.1.2';
+export const VERSION = '0.1.3';
 
 // The bundler replaces these accessors with references to generated constants.
 export function embedded_data() { return null; };
