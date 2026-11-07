@@ -8,6 +8,8 @@ cd "$(dirname "$0")/../.."
 . tests/integration/cases/strategy-import.sh
 . tests/integration/cases/source-refresh.sh
 . tests/integration/cases/strategy-composition.sh
+. tests/integration/cases/fakes.sh
+. tests/integration/cases/assets.sh
 . tests/integration/cases/applied-provenance.sh
 . tests/integration/cases/devices-firewall.sh
 . tests/integration/cases/benchmark.sh

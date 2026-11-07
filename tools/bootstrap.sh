@@ -35,13 +35,39 @@ work=$(mktemp -d /tmp/jzm-install.XXXXXX)
 trap 'rm -rf -- "$work"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
-curl --fail --silent --show-error --location --max-redirs 3 --proto '=https' --proto-redir '=https' \
-    --connect-timeout 10 --max-time 120 --max-filesize 2097152 \
-    --output "$work/manager.sh" \
-    https://raw.githubusercontent.com/swxfe/just-zapret-manager/main/dist/just-zapret-manager.sh
+download() {
+    curl --fail --silent --show-error --location --max-redirs 3 --proto '=https' --proto-redir '=https' \
+        --connect-timeout 10 --max-time 120 --max-filesize "$3" --output "$2" "$1"
+}
+target_dir=/overlay
+[ -d "$target_dir" ] || target_dir=/
+available=$(df -Pk "$target_dir" | awk 'NR==2 {print $4}')
+case "$available" in ''|*[!0-9]*) printf '%s\n' 'Не удалось проверить свободное место.' >&2; exit 1;; esac
+[ "$available" -ge 5120 ] || { printf '%s\n' 'Недостаточно свободного места: требуется резерв 5120 KB.' >&2; exit 1; }
+# A commit SHA keeps the code and resource archive from different revisions apart.
+download https://api.github.com/repos/swxfe/just-zapret-manager/commits/main "$work/revision.json" 65536
+revision=$(ucode -S -e 'import * as fs from "fs"; let sha=json(fs.readfile(ARGV[0])).sha; if(type(sha)!="string" || !match(sha,/^[a-f0-9]{40}$/)) exit(1); print(sha);' "$work/revision.json")
+base=https://raw.githubusercontent.com/swxfe/just-zapret-manager/$revision/dist
+# Obtain payload sizes before pulling binaries; unknown sizes use conservative bounds.
+payload_size() {
+    curl --fail --silent --show-error --location --head --max-redirs 3 --proto '=https' --proto-redir '=https' \
+        --connect-timeout 10 --max-time 60 --output "$work/headers" "$1"
+    size=$(awk 'tolower($1)=="content-length:" {gsub("\r", "", $2); value=$2} END {print value}' "$work/headers")
+    case "$size" in ''|*[!0-9]*) size=$2;; esac
+    [ "${#size}" -le 8 ] && [ "$size" -gt 0 ] && [ "$size" -le "$2" ] || size=$2
+    printf '%s\n' "$size"
+}
+code_size=$(payload_size "$base/Zapret-Manager.sh" 2097152)
+asset_size=$(payload_size "$base/jzm-assets.tar.gz" 8388608)
+required=$(( ((code_size + asset_size + 1023) / 1024) * 2 + 5120 ))
+[ "$available" -ge "$required" ] || { printf '%s\n' 'Недостаточно места для JZM, ассетов и резерва Flash.' >&2; exit 1; }
+download "$base/Zapret-Manager.sh" "$work/manager.sh" 2097152
+download "$base/jzm-assets.tar.gz" "$work/jzm-assets.tar.gz" 8388608
 test -s "$work/manager.sh"
+test -s "$work/jzm-assets.tar.gz"
 sh -n "$work/manager.sh"
-JZM_MODE='command' sh "$work/manager.sh" manager-install
+# Expanded-size preflight and validation run before any managed asset is written.
+JZM_MODE='command' sh "$work/manager.sh" manager-install "$work/jzm-assets.tar.gz"
 rm -rf -- "$work"
 trap - 0 INT TERM HUP
 exec /usr/bin/jzm

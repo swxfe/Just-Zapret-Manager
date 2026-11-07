@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
-bad cli strategy apply v1
+# A missing packaged dependency must fail offline, without fetching a replacement.
+dependency=$(cli strategy show general | sed -n '/^--.*=\/opt\/zapret\/fakes\//s/^[^=]*=//p' | head -n 1)
+[ -n "$dependency" ]
+mv "$ZM_TEST_ROOT$dependency" "$work/missing-v1-fake"
+bad cli strategy apply general
+mv "$work/missing-v1-fake" "$ZM_TEST_ROOT$dependency"
 [ ! -e "$statefile" ]
 equal_file "$conf" "$work/conf.before"
 printf '%s\n' '--filter-tcp=443' '--dpi-desync=multisplit' > "$work/custom.txt"

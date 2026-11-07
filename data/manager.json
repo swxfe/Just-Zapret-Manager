@@ -7,9 +7,6 @@
   "max_domains": 50000,
   "max_strategies": 256,
   "max_urls": 64,
-  "hostlist_urls": {
-    "exclude": "https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/zapret-hosts-user-exclude.txt"
-  },
   "updater": {
     "repo": "swxfe/just-zapret-manager",
     "branch": "main",

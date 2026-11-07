@@ -12,7 +12,13 @@ case "$1" in
         fi
         : > "$state"
         ;;
-    stop) rm -f "$state";;
+    stop)
+        if [ -f "$ZM_TEST_ROOT/fail-stop" ]; then
+            rm -f "$ZM_TEST_ROOT/fail-stop" "$state"
+            exit 1
+        fi
+        rm -f "$state"
+        ;;
     enable) : > "$ZM_TEST_ROOT/enabled";;
     disable) rm -f "$ZM_TEST_ROOT/enabled";;
     *) exit 2;;

@@ -1,7 +1,9 @@
 import * as fs from 'fs';
 import { cached } from 'cache';
 import { check, read, send, invoke, output } from 'common';
-import { embedded_header, embedded_footer, embedded_config, VERSION } from 'resources';
+import { embedded_header, embedded_footer, VERSION } from 'resources';
+import { default_settings } from 'settings';
+import { install_assets } from 'assets';
 
 export function newer_version(candidate, current) {
     check(type(candidate) == 'string' && match(candidate, /^[0-9]+\.[0-9]+\.[0-9]+$/), 'неверная версия менеджера');
@@ -28,12 +30,14 @@ export function render_bundle(ctx) {
     return body + 'JZM_PARTS=' + count + '\nexport JZM_PARTS\n' + embedded_footer();
 };
 
-export function install_manager(ctx) {
-    if (!getenv('ZM_TRANSACTION')) { check(invoke(ctx, ['manager-install']) == 0, 'не удалось установить менеджер'); return; }
+export function install_manager(ctx, archive) {
+    if (!getenv('ZM_TRANSACTION')) { check(invoke(ctx, ['manager-install', ...(archive ? [archive] : [])]) == 0, 'не удалось установить менеджер'); return; }
     let destination = getenv('DESTDIR') || ctx.root;
     check(destination == '' || (match(destination, /^\/[A-Za-z0-9_./ -]+$/) && !match(destination, /(^|\/)\.\.?(\/|$)/)), 'неверный DESTDIR');
+    if (archive != null) install_assets(ctx, archive);
     send(ctx, 'manager-install', [destination], render_bundle(ctx));
-    let config = embedded_config() || json(read(ctx.home + '/data/manager.json', 65536));
+    let path = ctx.assets + '/resources/manager.json';
+    let config = fs.stat(path) ? json(read(path, 65536)) : default_settings();
     send(ctx, 'manager-config-init', [destination], sprintf('%J\n', config));
     // Early builds saved an empty update source; migrate only that known default.
     let saved = destination + '/etc/zapret-manager/manager-config.json';

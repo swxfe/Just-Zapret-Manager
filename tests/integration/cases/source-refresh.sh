@@ -1,14 +1,16 @@
 #!/bin/sh
 set -eu
-# Upstream catalogs are parsed as data, stored atomically and applied with required resources.
+# Installed strategy catalogs remain available while package-network operations fail.
 touch "$ZM_TEST_ROOT/mock-sources"
-cli source refresh manager > "$work/source.out"
+# Historical flag remains an input to the network-failure scenarios only.
 cli source list manager | grep -q '^v99$'
-cli source refresh flowseal > "$work/source.out"
+cli source list flowseal > "$work/source.out"
+cli source list flowseal | grep -q '^base_general$'
+cli source list flowseal > "$work/source.out"
 cli source list flowseal | grep -q '^general$'
 # API failures must explain themselves and preserve catalogs, UCI and service state.
-cp "$ZM_TEST_ROOT/etc/zapret-manager/manager.json" "$work/api-manager.before"
-cp "$ZM_TEST_ROOT/etc/zapret-manager/flowseal.json" "$work/api-flowseal.before"
+cp "$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/flowseal.json" "$work/api-flowseal.before"
+cp "$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/manager.json" "$work/api-manager.before"
 cp "$conf" "$work/api-conf.before"
 for kind in primary secondary throttled forbidden unavailable transport; do
     printf '403\n' > "$ZM_TEST_ROOT/api-status"
@@ -21,10 +23,7 @@ for kind in primary secondary throttled forbidden unavailable transport; do
         unavailable) printf '503\n' > "$ZM_TEST_ROOT/api-status"; printf '<html>Unavailable</html>' > "$ZM_TEST_ROOT/api-body";;
         transport) touch "$ZM_TEST_ROOT/api-transport-fail";;
     esac
-    for command in 'source refresh manager' 'source refresh flowseal' 'install-upstream'; do
-        # These fixed test commands deliberately expand into separate arguments.
-        # shellcheck disable=SC2086
-        bad cli $command
+    bad cli install-upstream
         case "$kind" in
             primary|secondary|throttled) grep -Fq 'Превышен лимит запросов GitHub API (60/час на ваш IP)' "$work/error";;
             forbidden) grep -Fq 'GitHub API: ошибка HTTP 403' "$work/error";;
@@ -32,11 +31,17 @@ for kind in primary secondary throttled forbidden unavailable transport; do
             transport) grep -Fq 'github-download: код завершения 28' "$work/error";;
         esac
         equal_file "$conf" "$work/api-conf.before"
-        equal_file "$ZM_TEST_ROOT/etc/zapret-manager/manager.json" "$work/api-manager.before"
-        equal_file "$ZM_TEST_ROOT/etc/zapret-manager/flowseal.json" "$work/api-flowseal.before"
+        equal_file "$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/flowseal.json" "$work/api-flowseal.before"
         cli status | grep -q running
         [ ! -d "$ZM_TEST_ROOT/tmp/zapret-manager.zapret.lock" ]
-    done
+    cli source list manager | grep -q '^v99$'
+    equal_file "$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/manager.json" "$work/api-manager.before"
+    cli source list flowseal | grep -q '^base_general$'
+    cli source list manager | grep -q '^v99$'
+    equal_file "$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/manager.json" "$work/api-manager.before"
+    cli source list flowseal | grep -q '^general$'
+    equal_file "$conf" "$work/api-conf.before"
+    equal_file "$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/flowseal.json" "$work/api-flowseal.before"
 done
 rm -f "$ZM_TEST_ROOT/api-status" "$ZM_TEST_ROOT/api-remaining" "$ZM_TEST_ROOT/api-body" "$ZM_TEST_ROOT/api-transport-fail"
-printf '%s\n' 'sources: 18 API failures preserve catalogs, configuration and service state'
+printf '%s\n' 'sources: 6 package API failures preserve state; both strategy catalogs stay available offline'

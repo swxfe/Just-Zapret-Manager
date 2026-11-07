@@ -4,6 +4,8 @@ import { domains, urls, validate_list_snapshot } from 'domains';
 export function run() {
     equal(domains('EXAMPLE.COM\r\nexample.com # duplicate\nsub.example.com\n', 3),
           ['example.com', 'sub.example.com'], 'normalization and deduplication');
+    equal(domains('^DNS.GOOGLE\ndns.google\n^dns.google\n', 2), ['^dns.google', 'dns.google'], 'preserve Flowseal exact-match domain markers');
+    rejects(() => domains('^^dns.google', 2), 'reject malformed exact-match marker');
     equal(domains('', 1), [], 'empty list');
     equal(validate_list_snapshot('# package defaults\n127.0.0.0/8\n::1\nfc00::/7\nru\nрф\nexample.com\n', 8, 1024), true, 'backup preserves upstream mixed list formats');
     rejects(() => validate_list_snapshot('a\x00b', 8, 1024), 'backup rejects NUL bytes');

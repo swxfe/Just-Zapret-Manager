@@ -1,10 +1,13 @@
 import { settings } from 'settings';
 import { catalog, compose, label_strategy, replace_group } from 'strategies';
-import { flowseal_strategy } from 'sources';
+import { flowseal_strategy } from '../../tools/lib/import-strategies.uc';
 import { read } from 'common';
 
 export function fixture() {
-    let home = getenv('ZM_HOME'), ctx = settings(home, null, null), list = catalog(ctx);
+    let home = getenv('ZM_HOME'), ctx = settings(home, null, null);
+    ctx.sources = json(read(home + '/tests/fixtures/ports.json', 65536));
+    ctx.resources = home + '/tests/fixtures';
+    let list = catalog(ctx);
     let v7 = compose(ctx, ['v7']), games = compose(ctx, ['Gv1']);
     let joined = compose(ctx, ['v7', 'Yv08', 'Dv1']);
     let converted = flowseal_strategy(ctx, read(home + '/tests/fixtures/flowseal.bat', 65536));

@@ -21,6 +21,12 @@ printf '0\n' | JZM_CONFIG=$work/manager.json sh src/launcher.sh > "$work/manual-
 grep -q '^Стратегии: general (изменена пользователем)$' "$work/manual-status.out"
 equal_file "$statefile" "$work/applied.before"
 cp "$conf" "$work/manual.before"
+# Cancelling the manual-change warning must not claim the strategy was cleared.
+printf '3\n6\ny\nn\n\n0\n0\n' | JZM_CONFIG=$work/manager.json sh src/launcher.sh > "$work/cancel-clear-manual.out"
+grep -q 'Очистка отменена' "$work/cancel-clear-manual.out"
+if grep -q 'Стратегия очищена' "$work/cancel-clear-manual.out"; then exit 1; fi
+equal_file "$conf" "$work/manual.before"
+equal_file "$statefile" "$work/applied.before"
 for answer in n ''; do
     printf '%s\n' "$answer" | cli source apply flowseal general > "$work/cancel-state.out"
     grep -q 'ваши ручные изменения будут заменены' "$work/cancel-state.out"
@@ -28,15 +34,15 @@ for answer in n ''; do
     equal_file "$conf" "$work/manual.before"
     equal_file "$statefile" "$work/applied.before"
 done
-cli source compose manager v99 Yv99 < /dev/null > "$work/cancel-state.out"
+cli source compose flowseal base_general youtube_general < /dev/null > "$work/cancel-state.out"
 equal_file "$conf" "$work/manual.before"
 equal_file "$statefile" "$work/applied.before"
 cli strategy import "$work/custom.txt" < /dev/null > "$work/cancel-state.out"
 equal_file "$conf" "$work/manual.before"
 equal_file "$statefile" "$work/applied.before"
 # A catalog-only change adds the conflict suffix without changing saved state.
-cp "$ZM_TEST_ROOT/etc/zapret-manager/flowseal.json" "$work/catalog.before"
-ucode -S -D "file=$ZM_TEST_ROOT/etc/zapret-manager/flowseal.json" -e '
+cp "$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/flowseal.json" "$work/catalog.before"
+ucode -S -D "file=$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/flowseal.json" -e '
     import * as fs from "fs";
     let data = json(fs.readfile(file));
     data.catalog = replace(data.catalog, "--filter-l7=discord,stun", "--filter-l7=stun");
@@ -50,10 +56,10 @@ printf 'y\n' | cli source apply flowseal general > "$work/accept-state.out"
 check_applied
 printf '0\n' | JZM_CONFIG=$work/manager.json sh src/launcher.sh > "$work/updated-status.out"
 grep -q '^Стратегии: general$' "$work/updated-status.out"
-cp "$work/catalog.before" "$ZM_TEST_ROOT/etc/zapret-manager/flowseal.json"
+cp "$work/catalog.before" "$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/flowseal.json"
 cli backup restore "$ZM_TEST_ROOT/etc/zapret-manager/backups/labelled-backup.json"
 # Compose also records a complete assembly; a failed state publication rolls UCI back.
-cli source compose manager v99 Yv99
+cli source compose flowseal base_general youtube_general
 check_applied
 cp "$conf" "$work/state-write.before"
 cp "$statefile" "$work/state-write-state.before"
@@ -63,19 +69,19 @@ chmod +x "$work/fail-state-bin/mv"
 JZM_REAL_MV=$(command -v mv)
 export JZM_REAL_MV
 touch "$ZM_TEST_ROOT/fail-state-write"
-bad env LD_PRELOAD="$work/faults.so" PATH="$work/fail-state-bin:$PATH" JZM_MODE=command /bin/sh "$ZM_HOME/src/launcher.sh" --config "$work/manager.json" source apply manager v99
+bad env LD_PRELOAD="$work/faults.so" PATH="$work/fail-state-bin:$PATH" JZM_MODE=command /bin/sh "$ZM_HOME/src/launcher.sh" --config "$work/manager.json" source apply flowseal base_general
 equal_file "$conf" "$work/state-write.before"
 equal_file "$statefile" "$work/state-write-state.before"
 # A worker dying without running ucode catch handlers leaves its stage to the supervisor.
 touch "$ZM_TEST_ROOT/crash-state-write"
-bad env LD_PRELOAD="$work/faults.so" JZM_MODE=command /bin/sh "$ZM_HOME/src/launcher.sh" --config "$work/manager.json" source apply manager v99
+bad env LD_PRELOAD="$work/faults.so" JZM_MODE=command /bin/sh "$ZM_HOME/src/launcher.sh" --config "$work/manager.json" source apply flowseal base_general
 equal_file "$conf" "$work/state-write.before"
 equal_file "$statefile" "$work/state-write-state.before"
 for staged in "$ZM_TEST_ROOT/etc/zapret-manager/".zm-*; do [ ! -e "$staged" ]; done
 cli status | grep -q running
 cli backup restore "$ZM_TEST_ROOT/etc/zapret-manager/backups/labelled-backup.json"
-cp "$ZM_TEST_ROOT/etc/zapret-manager/flowseal.json" "$work/source.before"
+cp "$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/flowseal.json" "$work/source.before"
 printf 'bad\n' > "$ZM_TEST_ROOT/download"
 rm "$ZM_TEST_ROOT/mock-sources"
 bad cli source refresh flowseal
-equal_file "$ZM_TEST_ROOT/etc/zapret-manager/flowseal.json" "$work/source.before"
+equal_file "$ZM_TEST_ROOT/etc/zapret-manager/assets/catalogs/flowseal.json" "$work/source.before"

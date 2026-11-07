@@ -31,11 +31,12 @@ function tx_changed(ctx, path) {
     invalidate(ctx);
 }
 
-function tx_directory(path) {
+function tx_directory(path, mode) {
     let st = fs.lstat(path);
     if (st != null) { tx_check(st.type == 'directory', 'каталог заменён ссылкой или файлом: ' + path); return; }
-    tx_directory(fs.dirname(path));
-    tx_check(fs.mkdir(path, 0700), 'не удалось создать каталог: ' + path);
+    tx_directory(fs.dirname(path), mode);
+    tx_check(fs.mkdir(path, mode ?? 0700), 'не удалось создать каталог: ' + path);
+    if (mode != null) tx_check(fs.chmod(path, mode), 'не удалось задать права каталога: ' + path);
 }
 
 function tx_token() {
@@ -276,9 +277,6 @@ export function native_send(ctx, action, args, text, safety) {
     case 'state-write':
         tx_check(match(args[0], /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/), 'неверное имя файла');
         path = ctx.state + '/' + args[0]; break;
-    case 'source-write':
-        tx_check(index(['manager', 'flowseal'], args[0]) != -1, 'неизвестный источник');
-        path = ctx.state + '/' + args[0] + '.json'; break;
     case 'device-hook-write': {
         let legacy = ctx.base + '/init.d/openwrt/custom.d/20-script.sh';
         let saved = ctx.state + '/legacy-exclusion-hook.sh';
@@ -317,15 +315,7 @@ export function native_send(ctx, action, args, text, safety) {
         path = ctx.state + '/manager-config.json';
         if (fs.lstat(path)) return true;
         break;
-    case 'resource-bytes': {
-        tx_check(match(args[0], /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.bin$/) && length(text) > 0 && length(text) <= ctx.max_file_bytes,
-            'неверный bin-ресурс');
-        let path = ctx.base + '/files/fake/' + args[0];
-        if (fs.lstat(path)) return true;
-        tx_append(tx_lock(ctx) + '/created_fakes', args[0] + '\n');
-        tx_put(ctx, path, text, null, safety);
-        return true;
-    }
+    case 'state-assets-manifest': path = ctx.assets + '/manifest.json'; break;
     case 'backup-write': {
         tx_check(length(text) > 0, 'пустая резервная копия');
         let path = args[0], temporary = ctx.root + '/tmp/', backups = ctx.state + '/backups/';
@@ -350,16 +340,19 @@ export function native_action(ctx, action, args, safety) {
     case 'settle':
         tx_check(length(args) == 1 && type(+args[0]) == 'int' && +args[0] >= 0 && +args[0] <= 60, 'неверный интервал ожидания');
         sleep(+args[0] * 1000); return true;
-    case 'resource-write': {
-        tx_check(match(args[1], /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.bin$/), 'неверное имя bin-ресурса');
-        let path = ctx.base + '/files/fake/' + args[1];
-        if (fs.lstat(path) != null) return true;
+    case 'asset-file': {
+        tx_check(length(args) == 2, 'неверная запись ассета');
+        let target = args[1], asset_prefix = ctx.assets + '/';
+        tx_check((substr(target, 0, length(asset_prefix)) == asset_prefix && !match(target, /(^|\/)\.\.?(\/|$)/)) ||
+            (target == ctx.base + '/fakes/' + fs.basename(target) &&
+             match(fs.basename(target), /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.bin$/)), 'путь вне ассетов');
         let st = fs.stat(args[0]);
-        tx_check(st?.type == 'file' && st.size > 0 && st.size <= ctx.max_file_bytes, 'неверный размер bin-ресурса');
+        tx_check(st?.type == 'file' && st.size <= ctx.max_file_bytes, 'неверный размер ассета');
         let body = fs.readfile(args[0], ctx.max_file_bytes + 1);
-        tx_check(body != null && length(body) == st.size, 'ошибка чтения bin-ресурса');
-        tx_append(tx_lock(ctx) + '/created_fakes', args[1] + '\n');
-        tx_put(ctx, path, body, null, safety);
+        tx_check(body != null && length(body) == st.size, 'ошибка чтения ассета');
+        if (substr(target, 0, length(ctx.base + '/fakes/')) == ctx.base + '/fakes/')
+            tx_directory(fs.dirname(target), 0755);
+        tx_put(ctx, target, body, 0644, safety);
         return true;
     }
     case 'manager-install': {

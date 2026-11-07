@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as uci from 'uci';
 
 function request(url, options) {
-    let root = getenv('ZM_TEST_ROOT'), home = getenv('ZM_HOME');
+    let root = getenv('ZM_TEST_ROOT');
     let reply = { status: 200, headers: {}, body: '' };
     let flag = (name) => fs.stat(root + '/' + name) != null;
     let contents = (name) => fs.readfile(root + '/' + name);
@@ -26,14 +26,6 @@ function request(url, options) {
         fs.unlink(root + '/pause-probe');
     }
     if (!options.allow_http) {
-        if (flag('mock-sources')) {
-            if (match(url, /\/commits\//)) reply.body = '{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}';
-            else if (match(url, /\/Zapret-Manager.sh$/)) reply.body = fs.readfile(home + '/tests/fixtures/manager.txt');
-            else if (match(url, /\/files\/StrYoutube$/)) reply.body = fs.readfile(home + '/tests/fixtures/youtube.txt');
-            else if (match(url, /\/git\/trees\//)) reply.body = '{"tree":[{"type":"blob","path":"general.bat"}],"truncated":false}';
-            else if (match(url, /\/general.bat$/)) reply.body = fs.readfile(home + '/tests/fixtures/flowseal.bat');
-            else if (match(url, /\/bin\/.*\.bin$/)) reply.body = 'FAKE-BLOB-FIXTURE';
-        }
         if (!length(reply.body)) reply.body = contents('download');
         return reply;
     }

@@ -25,12 +25,12 @@ cli update-upstream > "$work/no-update.out"
 grep -q 'Новых версий нет' "$work/no-update.out"
 equal_file "$conf" "$work/no-update.before"
 rm "$ZM_TEST_ROOT/mock-release"
-cli strategy apply v3 Yv08
+cli source compose flowseal base_general youtube_general
 printf '0\n' | JZM_CONFIG=$work/manager.json sh "$work/standalone.sh" > "$work/dashboard.out"
 grep -q 'установлен · 72.20260307-r1' "$work/dashboard.out"
 if grep -q 'LuCI Zapret:' "$work/dashboard.out"; then exit 1; fi
-grep -q 'Yv08' "$work/dashboard.out"
-grep -q 'v3' "$work/dashboard.out"
+grep -q 'youtube_general' "$work/dashboard.out"
+grep -q 'base_general' "$work/dashboard.out"
 mkdir -p "$ZM_TEST_ROOT/bin"
 cat > "$ZM_TEST_ROOT/bin/ubus" <<'EOF'
 #!/bin/sh

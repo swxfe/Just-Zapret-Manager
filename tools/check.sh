@@ -24,10 +24,10 @@ done
 python3 - <<'PY'
 import ast
 from pathlib import Path
-for path in Path('tests').rglob('*.py'):
+for path in [*Path('tests').rglob('*.py'), *Path('tools').rglob('*.py')]:
     ast.parse(path.read_text(), filename=str(path))
 PY
-JZM_MODE='command' sh src/launcher.sh strategy list >/dev/null
+JZM_MODE='command' sh src/launcher.sh strategy list tests/fixtures/strategies.txt >/dev/null
 # No legacy installer or downloaded-and-executed shell is allowed back into runtime.
 if grep -Ein 'mihomo|magitrickle|netshift|byedpi|tg-ws|amnezia|steer|splify|curl.*\|.*sh|wget.*\|.*sh' \
     src/launcher.sh src/shell/*.sh src/lib/*.uc src/main.uc data/*.json; then

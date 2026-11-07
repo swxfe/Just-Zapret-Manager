@@ -1,0 +1,6 @@
+{
+  "family": "inet",
+  "table": "zapret",
+  "chain": "postrouting_hook",
+  "mark": "0x40000000"
+}

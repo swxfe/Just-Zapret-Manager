@@ -14,10 +14,15 @@ test: check
 bundle: test
     sh tools/bundle.sh
 
+# Release code and all external resources are built separately.
+dist: test
+    python3 tools/build-assets.py --output dist/jzm-assets.tar.gz
+    sh tools/bundle.sh
+
 # 4. Скачать QEMU и сгенерировать чистый образ OpenWrt под Cudy WR3000P
 emulator-setup:
     sh tests/e2e/run.sh setup
 
 # 5. Собрать бандл и запустить полный E2E-тест в QEMU
-test-e2e: bundle
+test-e2e: dist
     sh tests/e2e/run.sh

@@ -1,8 +1,8 @@
 import { equal, rejects, count } from '../support/assertions.uc';
 import { label_strategy, strategy_sections, parse_catalog } from 'strategies';
-import { manager_catalog, flowseal_strategy } from 'sources';
-import { read } from 'common';
+import { flowseal_strategy, flowseal_groups, manager_catalog } from '../../tools/lib/import-strategies.uc';
 import { inspect_strategy, strategy_summary } from 'status';
+import { read } from 'common';
 import { fixture } from '../setup/unit.uc';
 
 export function run() {
@@ -14,8 +14,8 @@ export function run() {
            index(converted.body, '--ipset=') == -1, 'strip Windows-only controls'); count();
     assert(index(converted.body, '--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt') != -1,
            'map Google hostlist'); count();
-    equal(converted.assets['quic_initial_steamcommunity_com.bin'],
-          'bin/quic_initial_steamcommunity_com.bin', 'resolve active Discord fake alias');
+    assert(index(converted.body, '--dpi-desync-fake-discord=/opt/zapret/fakes/ACTIVE_DISCORD_UDP.bin') != -1,
+        'preserve exact Flowseal active fake'); count();
     assert(index(converted.body, ctx.sources.tcp_ports) != -1, 'resolve game ports'); count();
     let general = label_strategy('general', converted.body), flow_catalog = [{ name: 'general', body: converted.body }];
     equal(length(split(general, '#general\n')), 2, 'one Flowseal heading for all internal profiles');
@@ -27,6 +27,16 @@ export function run() {
     rejects(() => flowseal_strategy(ctx, '@echo off\necho hello'), 'missing winws command');
     rejects(() => flowseal_strategy(ctx, 'start x winws.exe --filter-tcp=%GameFilterTCP% --x=$(id)'), 'BAT command substitution');
     rejects(() => flowseal_strategy(ctx, 'start x winws.exe --filter-tcp=%GameFilterTCP% --x=%UNKNOWN%'), 'unknown BAT variable');
+    let groups = flowseal_groups(converted.body);
+    equal(length(groups), 4, 'all Flowseal groups are available');
+    equal(length(split(groups.games, '--new\n')), 2, 'both gaming protocols stay together');
+    equal(length(split(groups.discord, '--new\n')), 1, 'Discord UDP profile is retained');
+    assert(index(groups.youtube, '--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt') != -1,
+        'YouTube group keeps hostlist'); count();
+    assert(index(groups.base, '--filter-tcp=80,443') != -1, 'base group keeps TCP filter'); count();
+    equal(join('--new\n', [groups.discord, groups.youtube, split(groups.games, '--new\n')[0], groups.base,
+        split(groups.games, '--new\n')[1]]), converted.body, 'group extraction preserves every profile and option');
+    rejects(() => flowseal_groups('--filter-tcp=1234\n'), 'unknown group fails closed');
     let imported = manager_catalog(ctx, read(home + '/tests/fixtures/manager.txt', 65536),
         read(home + '/tests/fixtures/youtube.txt', 65536));
     let imported_names = map(parse_catalog(ctx, imported), (s) => s.name);

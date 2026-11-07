@@ -42,6 +42,6 @@ assert reads[root + '/etc/config/zapret'] <= 2, reads
 for path, count in reads.items():
     if path != root + '/etc/config/zapret':
         assert count <= 1, (path, count, reads)
-assert reads[root + '/etc/zapret-manager/manager.json'] == 1, reads
+assert reads[root + '/etc/zapret-manager/assets/catalogs/flowseal.json'] == 1, reads
 print(f'performance: {rounds} navigation cycles, zero fork/popen, managed inputs read once; '
       f'{elapsed * 1000 / rounds:.2f} ms/cycle on this host')

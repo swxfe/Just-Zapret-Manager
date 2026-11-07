@@ -4,6 +4,9 @@ cd "$(dirname "$0")/.."
 ZM_HOME=$(pwd -P)
 JZM_HTTP_PROVIDER=$ZM_HOME/tests/mocks/http-provider.uc
 export ZM_HOME JZM_HTTP_PROVIDER
+JZM_ASSETS_ARCHIVE=$ZM_HOME/.test-tmp/jzm-assets-fixture.tar.gz
+export JZM_ASSETS_ARCHIVE
+python3 tools/build-assets.py --fixtures --output "$JZM_ASSETS_ARCHIVE" >/dev/null
 sh tests/unit/run.sh
 sh tests/integration/run.sh
 sh tests/integration/packages.sh

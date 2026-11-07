@@ -67,7 +67,7 @@ function compute_device_list(ctx) {
 export function device_list(ctx) { return cached(ctx, 'device-list', () => compute_device_list(ctx)); };
 
 export function exclusion_hook(ctx, addresses) {
-    let cfg = json(resource(ctx.home, 'network.json'));
+    let cfg = json(resource(ctx.resources, 'network.json'));
     for (let key in ['family', 'table', 'chain'])
         check(match(cfg[key], /^[A-Za-z_][A-Za-z0-9_]*$/), 'неверный параметр nft: ' + key);
     check(match(cfg.mark, /^0x[a-fA-F0-9]{1,8}$/), 'неверная метка nft');

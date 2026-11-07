@@ -225,10 +225,11 @@ ssh_ready=1
 stage guest_bootstrap remote "date -u -s '@$(date +%s)' && JZM_E2E_GUEST=1 sh -s" < "$runtime/bootstrap.sh"
 stage upload_manager copy_to "$project/dist/just-zapret-manager.sh" /tmp/just-zapret-manager.sh
 # Installation is an internal command too; public positional arguments remain forbidden.
-stage install_manager remote 'JZM_MODE=command sh /tmp/just-zapret-manager.sh manager-install && test -x /usr/bin/jzm'
+stage upload_assets copy_to "$project/dist/jzm-assets.tar.gz" /tmp/jzm-assets.tar.gz
+stage install_manager remote 'JZM_MODE=command sh /tmp/just-zapret-manager.sh manager-install /tmp/jzm-assets.tar.gz && test -x /usr/bin/jzm'
 stage install_zapret_luci remote 'JZM_MODE=command /usr/bin/jzm install-upstream'
-stage refresh_manager_catalog remote 'JZM_MODE=command /usr/bin/jzm source refresh manager'
-stage apply_v7 remote 'JZM_MODE=command /usr/bin/jzm source apply manager v7'
+stage local_flowseal_catalog remote 'JZM_MODE=command /usr/bin/jzm source list flowseal'
+stage apply_base_general remote 'JZM_MODE=command /usr/bin/jzm source apply flowseal base_general'
 stage upload_suite copy_to "$runtime/router.sh" /tmp/jzm-e2e-router.sh
 guest_started=1
 stage router_suite remote 'JZM_E2E_GUEST=1 sh /tmp/jzm-e2e-router.sh'

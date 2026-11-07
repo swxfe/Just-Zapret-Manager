@@ -13,6 +13,8 @@ export function strategy_key(name) {
 };
 
 export function strategy_group(name) {
+    let flow = match(name || '', /^(base|youtube|discord|games)_general(_|$)/);
+    if (flow) return flow[1];
     if (match(name || '', /^v[0-9]+$/)) return 'base';
     if (match(name || '', /^Yv[0-9]+$/)) return 'youtube';
     if (match(name || '', /^Dv[0-9]+$/)) return 'discord';
@@ -37,9 +39,9 @@ export function strategy_order(left, right) {
     return a < b ? -1 : 1;
 };
 
-export function profile_group(block) {
+export function profile_group(block, include_voice) {
     if (index(block, '--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt') != -1) return 'youtube';
-    if (index(block, '--hostlist-domains=discord.media') != -1) return 'discord';
+    if (index(block, '--hostlist-domains=discord.media') != -1 || (include_voice && index(block, '--filter-l7=discord,stun') != -1)) return 'discord';
     if (index(block, '--dpi-desync-any-protocol=1') != -1) return 'games';
     if (match(block, /^--filter-tcp=(80,)?443(\n|,)/)) return 'base';
     return null;
@@ -128,7 +130,7 @@ export function parse_catalog(ctx, text, wanted) {
 
 export function catalog(ctx, file, wanted) {
     return cached(ctx, 'catalog:' + sprintf('%J', [file, wanted]), () => {
-        let text = file ? read(file, ctx.max_file_bytes) : resource(ctx.home, 'strategies.txt');
+        let text = file ? read(file, ctx.max_file_bytes) : resource(ctx.resources, 'strategies.txt');
         return parse_catalog(ctx, text, wanted);
     });
 };
@@ -171,7 +173,7 @@ export function replace_group(current, replacement, group) {
         let blocks = [];
         for (let block in split(validate_body(section.body), '--new\n')) {
             let voice = index(block, '--filter-l7=discord,stun') != -1;
-            if (profile_group(block) == group || (!length(replacement) && group == 'discord' && voice)) continue;
+            if (profile_group(block, match(replacement, /^#discord_general/)) == group || (!length(replacement) && group == 'discord' && voice)) continue;
             push(blocks, block);
         }
         if (length(blocks)) push(keep, (section.label != null ? '#' + section.label + '\n' : '') + join('--new\n', blocks));

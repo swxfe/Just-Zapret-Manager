@@ -131,5 +131,5 @@ export function invoke(ctx, args) {
 };
 
 export function target_text(ctx, file) {
-    return file == '@default' ? resource(ctx.home, 'urls.txt') : read(file, ctx.max_file_bytes);
+    return file == '@default' ? resource(ctx.resources, 'urls.txt') : read(file, ctx.max_file_bytes);
 };

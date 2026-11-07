@@ -2,3 +2,7 @@
 --filter-tcp=443
 --hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
 --dpi-desync=multisplit
+#Yv100
+--filter-tcp=443
+--dpi-desync=fake
+--dpi-desync-fake-tls=/opt/zapret/files/fake/missing-manager-only.bin

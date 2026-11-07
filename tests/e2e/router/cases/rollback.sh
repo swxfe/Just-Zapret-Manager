@@ -11,18 +11,18 @@ busy_lock() {
     health
 }
 failed_download() {
-    cp /etc/zapret-manager/manager.json "$root/cache-before"
+    cp /etc/zapret-manager/assets/catalogs/flowseal.json "$root/cache-before"
     cp "$conf" "$root/before"
     mkdir -p "$root/fail-bin"
     printf 'function request(url, options) { die("HTTP transport failure"); }; return {request};\n' > "$root/fail-http.uc"
     printf '#!/bin/sh\nexit 22\n' > "$root/fail-bin/curl"
     chmod 755 "$root/fail-bin/curl"
-    reject env JZM_HTTP_PROVIDER="$root/fail-http.uc" PATH="$root/fail-bin:$PATH" JZM_MODE=command /usr/bin/jzm source refresh manager
-    cmp "$root/cache-before" /etc/zapret-manager/manager.json
+    reject env JZM_HTTP_PROVIDER="$root/fail-http.uc" PATH="$root/fail-bin:$PATH" JZM_MODE=command /usr/bin/jzm assets-install "$root/nonexistent-assets.tar.gz"
+    cmp "$root/cache-before" /etc/zapret-manager/assets/catalogs/flowseal.json
     unchanged
 }
 github_rate_limit() {
-    cp /etc/zapret-manager/manager.json "$root/cache-before"
+    cp /etc/zapret-manager/assets/catalogs/flowseal.json "$root/cache-before"
     cp "$conf" "$root/before"
     mkdir -p "$root/rate-bin"
     cat > "$root/rate-bin/curl" <<'EOF'
@@ -43,13 +43,13 @@ printf '403'
 EOF
     printf '%s\n' 'function request(url, options) { return {status:403,headers:{"x-ratelimit-remaining":"0"},body:"API rate limit exceeded for IP"}; }; return {request};' > "$root/rate-http.uc"
     chmod 755 "$root/rate-bin/curl"
-    for operation in source install; do
-        if [ "$operation" = source ]; then set -- source refresh manager; else set -- install-upstream; fi
-        reject env JZM_HTTP_PROVIDER="$root/rate-http.uc" PATH="$root/rate-bin:$PATH" JZM_MODE=command /usr/bin/jzm "$@" > "$root/api-error" 2>&1
+    set -- install-upstream
+    reject env JZM_HTTP_PROVIDER="$root/rate-http.uc" PATH="$root/rate-bin:$PATH" JZM_MODE=command /usr/bin/jzm "$@" > "$root/api-error" 2>&1
         grep -Fq 'Превышен лимит запросов GitHub API (60/час на ваш IP)' "$root/api-error"
-        cmp "$root/cache-before" /etc/zapret-manager/manager.json
-        unchanged
-    done
+        cmp "$root/cache-before" /etc/zapret-manager/assets/catalogs/flowseal.json
+    unchanged
+    env JZM_HTTP_PROVIDER="$root/rate-http.uc" JZM_MODE=command /usr/bin/jzm source list flowseal > "$root/local-catalog"
+    test -s "$root/local-catalog"
 }
 blockcheck_restore() {
     cp "$conf" "$root/before"

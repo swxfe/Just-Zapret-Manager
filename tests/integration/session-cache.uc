@@ -26,13 +26,13 @@ assert(!exists(ctx.cache, 'sentinel') && trim(output(ctx, 'config-get', ['DISABL
 assert(command_main([...argv, original], ctx) == 0, 'restore original option');
 
 // Once warm, navigation must still work if unchanged inputs temporarily disappear.
-let source = source_data(ctx, 'manager'), body = configured_strategy(ctx);
+let source = source_data(ctx, 'flowseal'), body = configured_strategy(ctx);
 let strategy = strategy_state(ctx), packages = package_versions(ctx);
 let hidden = ctx.root + '/tmp/session-config';
 assert(fs.rename(ctx.config, hidden), 'hide fixture configuration');
 try {
     assert(configured_strategy(ctx) == body && strategy_state(ctx).summary == strategy.summary, 'no config reread');
-    assert(source_data(ctx, 'manager').revision == source.revision, 'no catalog reread');
+    assert(source_data(ctx, 'flowseal').revision == source.revision, 'no catalog reread');
     assert(sprintf('%J', package_versions(ctx)) == sprintf('%J', packages), 'no package reread');
     invalidate(ctx);
     assert(configured_strategy(ctx) == '', 'invalidation observes missing configuration');

@@ -18,7 +18,7 @@ backup_roundtrip() {
     jzm hosts user add backup.example
     jzm backup restore "$root/roundtrip.json"
     unchanged
-    jzm config get NFQWS_OPT | grep -q '^#v7$'
+    jzm config get NFQWS_OPT | grep -q '^#base_general$'
     reject jzm backup save "$root/roundtrip.json"
 }
 invalid_backup() {

@@ -3,7 +3,7 @@ set -eu
 public_contract() {
     printf '0\n' | /usr/bin/jzm > "$root/menu"
     grep -q 'JZM · just-zapret-manager ' "$root/menu"
-    grep -q 'v7' "$root/menu"
+    grep -q 'base_general' "$root/menu"
     reject /usr/bin/jzm status
     jzm version
     jzm doctor
@@ -13,6 +13,17 @@ packages_luci() {
         if command -v apk >/dev/null 2>&1; then apk info -e "$package"
         else opkg status "$package" | grep -q 'Status: .* installed'; fi
     done
+    ucode -S -e '
+        import * as fs from "fs";
+        import { sha256 } from "digest";
+        let manifest=json(fs.readfile("/etc/zapret-manager/assets/manifest.json"));
+        for (let fake in manifest.fakes) {
+            assert(fake.source == "flowseal" && fake.path == "/opt/zapret/fakes/" + fake.name, "isolated Flowseal path");
+            let entry=filter(manifest.files, (entry) => entry.target == "fake" && entry.name == fake.name)[0];
+            let payload=fs.readfile(fake.path);
+            assert(payload != null && sha256(payload) == entry.sha256, "package installation must preserve Flowseal bytes: " + fake.name);
+        }
+    '
     test -s /usr/share/luci/menu.d/luci-app-zapret.json
     test -s /www/luci-static/resources/view/zapret/settings.js
     curl --fail --max-time 10 http://127.0.0.1/luci-static/resources/view/zapret/settings.js > "$root/luci.js"
@@ -24,7 +35,7 @@ noop_preserves_process() {
     nfqws_pids > "$root/noop-pids.before"
     ports=$(jzm config get NFQWS_PORTS_TCP)
     jzm config set NFQWS_PORTS_TCP "$ports"
-    jzm source apply manager v7
+    jzm source apply flowseal base_general
     jzm backup restore "$root/baseline.json"
     unchanged
     nfqws_pids > "$root/noop-pids.after"
@@ -32,19 +43,19 @@ noop_preserves_process() {
 }
 preset_label() {
     jzm config get NFQWS_OPT > "$root/opts"
-    [ "$(grep -c '^#v7$' "$root/opts")" -eq 1 ]
+    [ "$(grep -c '^#base_general$' "$root/opts")" -eq 1 ]
     [ "$(grep -c '^#' "$root/opts")" -eq 1 ]
-    [ "$(jzm source show manager v7)" = "$(jzm config get NFQWS_OPT)" ]
+    [ "$(jzm source show flowseal base_general)" = "$(jzm config get NFQWS_OPT)" ]
     health
 }
 modified_label() {
-    jzm source show manager v7 > "$root/original.opts"
-    sed 's/^--filter-tcp=443$/--filter-tcp=444/' "$root/original.opts" > "$root/modified.opts"
+    jzm source show flowseal base_general > "$root/original.opts"
+    sed 's/^--filter-tcp=80,443$/--filter-tcp=80,444/' "$root/original.opts" > "$root/modified.opts"
     reject cmp -s "$root/original.opts" "$root/modified.opts"
     uci set "zapret.@main[0].NFQWS_OPT=$(cat "$root/modified.opts")"
     uci commit zapret
     printf '0\n' | /usr/bin/jzm > "$root/menu"
-    grep -q 'v7 (изменена пользователем)' "$root/menu"
+    grep -q 'base_general (изменена пользователем)' "$root/menu"
     health
 }
 invalid_ports() {
@@ -59,7 +70,7 @@ invalid_ports() {
 }
 invalid_strategy() {
     cp "$conf" "$root/before"
-    reject jzm source apply manager missing-e2e-preset
+    reject jzm source apply flowseal missing-e2e-preset
     # This substitution must stay literal so the strategy validator can reject it.
     # shellcheck disable=SC2016
     printf '%s\n' '--filter-tcp=443' '--x=$(touch /tmp/jzm-e2e/injected)' > "$root/bad.txt"

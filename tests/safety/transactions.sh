@@ -27,13 +27,13 @@ cp -p "$ZM_TEST_ROOT/etc/zapret-manager/exported.txt" "$sandbox/export.before"
 JZM_SAFETY_STEP=dynamic-abort bad txn
 cmp "$sandbox/export.before" "$ZM_TEST_ROOT/etc/zapret-manager/exported.txt"
 JZM_SAFETY_STEP=asset-abort bad txn
-[ ! -e "$ZM_TEST_ROOT/opt/zapret/files/fake/test.bin" ]
+[ ! -e "$ZM_TEST_ROOT/opt/zapret/fakes/test.bin" ]
 JZM_SAFETY_STEP=asset-reset txn
-[ ! -e "$ZM_TEST_ROOT/opt/zapret/files/fake/test.bin" ]
+[ ! -e "$ZM_TEST_ROOT/opt/zapret/fakes/test.bin" ]
 JZM_SAFETY_STEP=asset-commit txn
-cmp "$JZM_SAFETY_INPUT" "$ZM_TEST_ROOT/opt/zapret/files/fake/test.bin"
+cmp "$JZM_SAFETY_INPUT" "$ZM_TEST_ROOT/opt/zapret/fakes/test.bin"
 JZM_SAFETY_STEP=asset-abort bad txn
-cmp "$JZM_SAFETY_INPUT" "$ZM_TEST_ROOT/opt/zapret/files/fake/test.bin"
+cmp "$JZM_SAFETY_INPUT" "$ZM_TEST_ROOT/opt/zapret/fakes/test.bin"
 printf '#!/bin/sh\nprintf old\n' > "$ZM_TEST_ROOT/usr/bin/jzm"
 printf '#!/bin/sh\nprintf previous\n' > "$ZM_TEST_ROOT/usr/bin/jzm.previous"
 chmod 700 "$ZM_TEST_ROOT/usr/bin/jzm"

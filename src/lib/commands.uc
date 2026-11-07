@@ -1,12 +1,15 @@
+import { current_fakes, prepare_fake_replacement } from 'fakes';
 import { check_update, cache_update, install_manager, apply_update } from 'manager';
 import { resource, VERSION } from 'resources';
 import * as fs from 'fs';
 import { check, read, backend, run, output, send, target_text } from 'common';
 import { settings } from 'settings';
 import { cached, invalidate } from 'cache';
-import { catalog, compose, compose_bodies, preserve_body, label_strategy, replace_group, remove_flowseal, strategy_key, strategy_sections } from 'strategies';
+import { catalog, compose, compose_bodies, preserve_body, label_strategy, replace_group, remove_flowseal, strategy_key, strategy_group, strategy_sections } from 'strategies';
 import { domains, urls, validate_list_snapshot } from 'domains';
-import { source_data, refresh_source, prepare_assets, release_install } from 'sources';
+import { source_data } from 'sources';
+import { release_install } from 'releases';
+import { install_assets } from 'assets';
 import { excluded, exclusion_hook, ipv4, device_list, legacy_exclusions } from 'devices';
 import { package_versions, configured_strategy, inspect_strategy, reference_catalog, service_running } from 'status';
 import { strategy_hash, read_applied, create_applied, validate_applied } from 'applied';
@@ -56,10 +59,11 @@ function persist_applied(ctx, body) {
     send(ctx, 'state-write', ['state.json'], sprintf('%J\n', state));
 }
 
-function approve_strategy_change(ctx) {
+function approve_strategy_change(ctx, clearing) {
     let state = read_applied(ctx);
     if (state == null || strategy_hash(configured_strategy(ctx)) == state.applied_hash) return true;
-    print('Внимание: ваши ручные изменения будут заменены версией из каталога. Продолжить? [y/N] ');
+    print(clearing ? 'Внимание: ваши ручные изменения будут удалены. Продолжить? [y/N] ' :
+        'Внимание: ваши ручные изменения будут заменены версией из каталога. Продолжить? [y/N] ');
     fs.stdout.flush();
     let answer = '';
     while (true) {
@@ -115,8 +119,7 @@ function initialize_lists(ctx) {
         let name = kind == 'user' ? 'zapret-hosts-user.txt' :
             (kind == 'exclude' ? 'zapret-hosts-user-exclude.txt' : 'zapret-hosts-google.txt');
         if (fs.stat(ctx.base + '/ipset/' + name)) continue;
-        let body = kind == 'google' ? resource(ctx.home, 'google.txt') :
-            (kind == 'exclude' ? resource(ctx.home, 'exclude.txt') : '');
+        let body = resource(ctx.resources, kind + '.txt');
         send(ctx, 'hosts-write', [kind], body);
     }
 }
@@ -131,7 +134,7 @@ function probe(ctx, targets) {
     return ok;
 }
 
-function benchmark(ctx, args, keep, source_kind, prepared) {
+function benchmark(ctx, args, keep, prepared) {
     arity(args, 1, 2);
     let targets = urls(target_text(ctx, args[0]), ctx.max_urls);
     let list = [], results = [];
@@ -157,7 +160,6 @@ function benchmark(ctx, args, keep, source_kind, prepared) {
     if (applied) {
         let body = label_strategy(best.name, filter(list, (s) => s.name == best.name)[0].body);
         initialize_lists(ctx);
-        if (source_kind != null) prepare_assets(ctx, source_kind, body, prepared);
         apply(ctx, body);
     }
     printf('%J\n', { control, total: length(targets), results, best, applied });
@@ -179,10 +181,11 @@ function host_command(ctx, args) {
     }
     else if (action == 'refresh') {
         arity(extra, 0, 0);
-        check(exists(ctx.hostlist_urls, kind), 'URL для списка не задан в manager.json');
-        items = domains(output(ctx, 'download', [ctx.connect_timeout, ctx.request_timeout,
-                        ctx.max_file_bytes, ctx.hostlist_urls[kind]]), ctx.max_domains);
-        check(length(items) > 0, 'сервер вернул пустой список');
+        let text = resource(ctx.resources, kind + '.txt');
+        validate_list_snapshot(text, ctx.max_domains, ctx.max_file_bytes);
+        send(ctx, 'hosts-write', [kind], text);
+        run(ctx, 'service', ['restart']);
+        return;
     }
     else {
         check(action == 'add' || action == 'remove', 'неизвестная операция со списком');
@@ -269,15 +272,15 @@ function backup(ctx, args) {
 }
 
 function dispatch(ctx, command, args) {
-    let changes_strategy = (command == 'strategy' && index(['apply', 'import'], args[0]) != -1) ||
+    let changes_strategy = (command == 'strategy' && index(['apply', 'import', 'clear'], args[0]) != -1) ||
         (command == 'source' && index(['apply', 'compose', 'group', 'remove', 'benchmark', 'auto-best'], args[0]) != -1) ||
         command == 'benchmark' || command == 'auto-best';
     // Run after acquiring the transaction lock, before downloads or configuration writes.
-    if (changes_strategy && !approve_strategy_change(ctx)) { print('\nДействие отменено.\n'); return; }
+    if (changes_strategy && !approve_strategy_change(ctx, command == 'strategy' && args[0] == 'clear')) { print('\nДействие отменено.\n'); return; }
     switch (command) {
     case 'backend-operation': {
         let action = args[0], values = slice(args, 3);
-        if (index(['state-write', 'source-write', 'hosts-write', 'config-restore', 'device-hook-write',
+        if (index(['state-write', 'hosts-write', 'config-restore', 'device-hook-write',
                    'manager-config-init', 'backup-write'], action) != -1) {
             check(length(values), 'не указан файл операции');
             send(ctx, action, slice(values, 1), read(values[0], ctx.max_file_bytes));
@@ -286,7 +289,7 @@ function dispatch(ctx, command, args) {
             print(output(ctx, action == 'config-read' ? 'config-get' : 'config-get-optional', values));
         else if (action == 'hosts-read-stdout') print(output(ctx, 'hosts-read', values));
         else {
-            check(index(['config-set', 'service', 'network', 'resource-write', 'manager-install',
+            check(index(['config-set', 'service', 'network', 'asset-file', 'manager-install',
                 'manager-uninstall', 'strategy-state-clear', 'schedule', 'uninstall-cleanup', 'status', 'doctor', 'settle'], action) != -1,
                 'неизвестная нативная операция: ' + action);
             run(ctx, action, values);
@@ -303,9 +306,13 @@ function dispatch(ctx, command, args) {
         check(args[0] == 'all', 'неверный режим удаления');
         run(ctx, 'uninstall-cleanup', args);
         break;
+    case 'assets-install':
+        arity(args, 1, 1);
+        install_assets(ctx, args[0]);
+        break;
     case 'manager-install':
-        arity(args, 0, 0);
-        install_manager(ctx);
+        arity(args, 0, 1);
+        install_manager(ctx, args[0]);
         break;
     case 'manager-uninstall':
         arity(args, 0, 0);
@@ -361,17 +368,29 @@ function dispatch(ctx, command, args) {
         if (args[0] == 'enable') run(ctx, 'service', ['enable']);
         run(ctx, 'service', ['restart']);
         break;
+    case 'fake':
+        arity(args, 1, 5);
+        if (args[0] == 'list') {
+            arity(args, 1, 1);
+            printf('%J\n', current_fakes(ctx));
+        }
+        else {
+            check(args[0] == 'replace', 'неверная команда фейков');
+            arity(args, 5, 5);
+            let body = prepare_fake_replacement(ctx, args[1], args[2], args[3], args[4]);
+            if (trim(body) != trim(configured_strategy(ctx))) apply(ctx, body);
+        }
+        break;
     case 'source': {
         arity(args, 2, 10);
         let action = args[0], kind = args[1];
-        check(kind == 'manager' || kind == 'flowseal', 'неизвестный источник');
+        check(kind == 'flowseal' || kind == 'manager', 'неизвестный источник');
         if (action == 'remove') {
-            arity(args, kind == 'manager' ? 3 : 2, kind == 'manager' ? 3 : 2);
+            arity(args, kind == 'manager' ? 3 : 2, 3);
             let current = output(ctx, 'config-get-optional', ['NFQWS_OPT']);
-            apply(ctx, kind == 'manager' ? replace_group(current, '', args[2]) : remove_flowseal(current));
+            apply(ctx, length(args) == 3 ? replace_group(current, '', args[2]) : remove_flowseal(current));
             break;
         }
-        if (action == 'refresh') { arity(args, 2, 2); refresh_source(ctx, kind); break; }
         let wanted = index(['show', 'apply', 'compose', 'group'], action) != -1 ?
             map(slice(args, action == 'group' ? 3 : 2), strategy_key) : null;
         let data = source_data(ctx, kind, wanted), list = data.strategies;
@@ -387,12 +406,14 @@ function dispatch(ctx, command, args) {
                 push(selected, label_strategy(name, found[0].body));
             }
             let body = action == 'compose' ? compose_bodies(selected) : join('--new\n', selected);
-            if (action == 'group') body = replace_group(output(ctx, 'config-get-optional', ['NFQWS_OPT']), body, args[2]);
+            if (action == 'group') {
+                check(strategy_group(slice(args, 3)[0]) == args[2], 'стратегия не относится к выбранной группе');
+                body = replace_group(output(ctx, 'config-get-optional', ['NFQWS_OPT']), body, args[2]);
+            }
             if (action == 'show') print(body);
             else {
                 check(ctx.profile == 'zapret' && fs.stat(ctx.config), 'сначала установите Zapret');
                 initialize_lists(ctx);
-                prepare_assets(ctx, kind, body, data);
                 apply(ctx, body);
             }
             break;
@@ -400,14 +421,14 @@ function dispatch(ctx, command, args) {
         if (action == 'export') {
             arity(args, 3, 3);
             check(match(args[2], /^[A-Za-z0-9_-]+\.txt$/), 'неверное имя файла каталога');
-            send(ctx, 'state-write', [args[2]], data.catalog);
+            send(ctx, 'state-write', [args[2]], join('', map(filter(list, (s) => (kind == 'manager' || strategy_group(s.name) == null)),
+                (s) => '#' + s.name + '\n' + s.body)));
             break;
         }
         check(action == 'benchmark' || action == 'auto-best', 'неизвестное действие источника');
         arity(args, 3, 3);
         initialize_lists(ctx);
-        for (let s in list) prepare_assets(ctx, kind, s.body, data);
-        benchmark(ctx, [args[2]], action == 'auto-best', kind, data);
+        benchmark(ctx, [args[2]], action == 'auto-best', { ...data, strategies: filter(list, (s) => (kind == 'manager' || strategy_group(s.name) == null)) });
         break;
     }
     case 'status': case 'doctor': case 'recover':
@@ -437,8 +458,16 @@ function dispatch(ctx, command, args) {
         }
         break;
     case 'strategy':
-        check(length(args) > 0, 'strategy: list/show/apply/import/validate');
-        if (args[0] == 'list') {
+        check(length(args) > 0, 'strategy: list/show/apply/import/validate/clear');
+        if (args[0] == 'clear') {
+            arity(args, 1, 1);
+            check(fs.stat(ctx.config), 'Zapret не установлен');
+            if (length(trim(configured_strategy(ctx))) ||
+                trim(output(ctx, 'config-get-optional', ['NFQWS_ENABLE'])) != '0' || service_running(ctx) != false)
+                apply(ctx, '');
+            else if (read_applied(ctx)?.applied_hash != strategy_hash('')) persist_applied(ctx, '');
+        }
+        else if (args[0] == 'list') {
             arity(args, 1, 2);
             for (let s in catalog(ctx, args[1])) printf('%s\n', s.name);
         }
@@ -480,7 +509,7 @@ function dispatch(ctx, command, args) {
             if (args[2]) catalog(ctx, args[2]);
         }
         if (args[0] != 'off' && length(args) == 2) {
-            send(ctx, 'state-write', ['scheduled.txt'], resource(ctx.home, 'strategies.txt'));
+            send(ctx, 'state-write', ['scheduled.txt'], resource(ctx.resources, 'strategies.txt'));
             push(args, ctx.state + '/scheduled.txt');
         }
         run(ctx, 'schedule', [ctx.file, ...args]);
@@ -544,6 +573,7 @@ try {
         ctx.state = ctx.root + '/etc/zapret-manager';
         ctx.base = ctx.root + '/opt/zapret';
         ctx.config = ctx.root + '/etc/config/zapret';
+        ctx.assets = ctx.state + '/assets';
     }
     if ((command == 'manager-install' || command == 'manager-uninstall' || command == 'uninstall') && getenv('DESTDIR')) {
         let destination = getenv('DESTDIR');
@@ -552,6 +582,7 @@ try {
         ctx.state = ctx.root + '/etc/zapret-manager';
         ctx.base = ctx.root + '/opt/zapret';
         ctx.config = ctx.root + '/etc/config/zapret';
+        ctx.assets = ctx.state + '/assets';
     }
     if (command == 'uninstall') {
         arity(args, 1, 1);
@@ -576,6 +607,7 @@ try {
          (args[0] == 'network' && args[3] == 'status'))) || index(['status', 'doctor', 'test', 'recover', 'blockcheck', 'manager-check'], command) != -1 ||
         (command == 'network' && args[0] == 'status') ||
         (command == 'devices' && args[0] == 'list') ||
+        (command == 'fake' && args[0] == 'list') ||
         (command == 'source' && index(['list', 'show'], args[0]) != -1) ||
         (command == 'strategy' && index(['list', 'show', 'validate'], args[0]) != -1) ||
         (command == 'config' && index(['show', 'get'], args[0]) != -1) ||

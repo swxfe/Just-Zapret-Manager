@@ -33,8 +33,8 @@ int rename(const char *source, const char *destination)
         int b = snprintf(crash_marker, sizeof(crash_marker), "%s/crash-state-write", root);
         if (a > 0 && (size_t)a < sizeof(crash_path) && b > 0 && (size_t)b < sizeof(crash_marker) &&
             strcmp(crash_path, destination) == 0 && unlink(crash_marker) == 0) _exit(73);
-        const char *files[] = { "state.json", "update.json" };
-        const char *markers[] = { "fail-state-write", "fail-update-write" };
+        const char *files[] = { "state.json", "update.json", "assets/manifest.json" };
+        const char *markers[] = { "fail-state-write", "fail-update-write", "fail-assets-write" };
         for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
             char path[4096], marker[4096];
             int n = snprintf(path, sizeof(path), "%s/etc/zapret-manager/%s", root, files[i]);

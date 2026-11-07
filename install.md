@@ -11,8 +11,8 @@
 wget -O /tmp/jzm-install.sh https://raw.githubusercontent.com/swxfe/just-zapret-manager/main/tools/bootstrap.sh && sh /tmp/jzm-install.sh
 ```
 
-Установщик проверяет среду и место перед установкой зависимостей, скачивает готовую сборку,
-устанавливает `/usr/bin/jzm` и открывает меню. Сам Zapret установите через
+Установщик проверяет среду и место перед установкой зависимостей, скачивает код и `jzm-assets.tar.gz` из одной ревизии,
+устанавливает `/usr/bin/jzm`, один раз распаковывает ассеты и открывает меню. Сам Zapret установите через
 **«Установка / обновление / удаление» → «Установить Zapret»**.
 Рекомендуемый источник — сборка remittor с LuCI.
 
@@ -24,11 +24,12 @@ jzm
 
 ## Ручная установка
 
-Если зависимости `ucode`, `ucode-mod-fs ucode-mod-uci ucode-mod-ubus ucode-mod-digest ucode-mod-uclient ucode-mod-uloop`, `uci`, `curl`, `ca-bundle` и `unzip` уже установлены:
+Скопируйте код и архив ассетов одного релиза на роутер. Если зависимости `tar`, `ucode`, `ucode-mod-fs ucode-mod-uci ucode-mod-ubus ucode-mod-digest ucode-mod-uclient ucode-mod-uloop`, `uci`, `curl`, `ca-bundle` и `unzip` уже установлены:
 
 ```sh
 wget -O /tmp/just-zapret-manager.sh https://raw.githubusercontent.com/swxfe/just-zapret-manager/main/dist/just-zapret-manager.sh
-JZM_MODE=command sh /tmp/just-zapret-manager.sh manager-install
+wget -O /tmp/jzm-assets.tar.gz https://raw.githubusercontent.com/swxfe/just-zapret-manager/main/dist/jzm-assets.tar.gz
+JZM_MODE=command sh /tmp/just-zapret-manager.sh manager-install /tmp/jzm-assets.tar.gz
 jzm
 ```
 
@@ -37,9 +38,9 @@ jzm
 ## Возможности
 
 - Устанавливать и обновлять Zapret и его LuCI-пакет через `apk` или `opkg`.
-- Загружать пресеты Flowseal и стратегии Zapret Manager.
+- Выбирать пресеты Flowseal и стратегии Zapret Manager из локальных ассетов. Фейки и списки берутся только из Flowseal.
 - Собирать основную стратегию, YouTube, Discord и игры. К Flowseal, включая ALT9, можно добавить игровой профиль.
-- Показывать применённые стратегии, ручные изменения и обновления каталога.
+- Показывать применённые стратегии, ручные изменения и состояние локального каталога.
 - Управлять доменами, исключениями устройств, автозапуском и резервными копиями.
 - Проверять доступность сайтов, сравнивать стратегии и запускать blockcheck.
 - Обновлять сам JZM из этого репозитория, сохраняя предыдущую сборку.
@@ -49,9 +50,26 @@ jzm
 
 Откройте **«Стратегии»**: выберите Flowseal или соберите профиль из отдельных групп.
 Чтобы дополнить Flowseal ALT9 игровым профилем, сначала примените ALT9, затем откройте
-**«Собрать: основная + YouTube + Discord + игры» → «Игры»** и выберите `Gv1`–`Gv4`.
+**«Стратегии» → «Игры»** и выберите `Gv1`–`Gv4` из каталога Zapret Manager.
 Flowseal останется в композиции; игровой профиль можно заменить или отключить там же.
 Работоспособность пресета зависит от провайдера — проверяйте результат на своей сети.
+
+В **«Стратегии» → «Фейки»** отображаются .bin файлы текущей конфигурации,
+параметры nfqws и профили, где они используются. Источник берётся из манифеста
+установленных ассетов; внешние пользовательские файлы отображаются отдельно.
+Выберите параметр и один из уже установленных .bin файлов Flowseal.
+Они находятся в `/opt/zapret/fakes/` с оригинальными именами. Пакет Zapret
+использует собственный каталог `/opt/zapret/files/fake/`, поэтому установка
+и обновление пакета не заменяют файлы Flowseal.
+Загрузка и распознавание через GitHub в рантайме отсутствуют.
+Замена затрагивает только выбранный параметр; исходные файлы сохраняются.
+При ошибке перезапуска настройки и состояние сервиса откатываются.
+
+В списках доменов пункт «Восстановить из установленных ассетов» берёт локальный
+файл по умолчанию. Новые версии ресурсов устанавливаются повторным запуском
+установщика с кодом и архивом одного релиза. Пользовательские списки при этом
+сохраняются. Обновление программы, установка пакетов и сетевые тесты продолжают
+использовать сеть по явному запросу пользователя.
 
 ## Обновления и данные
 
@@ -64,6 +82,7 @@ JZM проверяет сборку в `swxfe/just-zapret-manager`, ветка `
 | --- | --- |
 | `/usr/bin/jzm` | Менеджер |
 | `/etc/zapret-manager/` | Настройки, состояние, каталоги и резервные копии JZM |
+| `/etc/zapret-manager/assets/` | Установленные каталоги, списки по умолчанию и манифест |
 | `/etc/zapret-manager/backups/` | Резервные копии по умолчанию |
 | `/etc/config/zapret` | Конфигурация Zapret для LuCI |
 | `/opt/zapret/` | Zapret, списки, fake-файлы и хуки |
@@ -113,7 +132,7 @@ sudo apt-get update
 sudo apt-get install -y git build-essential cmake ninja-build pkg-config libjson-c-dev libpcre2-dev libmd-dev libssl-dev shellcheck curl unzip python3 just
 sh tools/setup-dev.sh
 export PATH="$HOME/.local/share/jzm-dev/openwrt-25.12/bin:$PATH"
-just bundle
+just dist
 ```
 
 Если в вашем дистрибутиве нет пакета `just`, установите его по
@@ -124,7 +143,8 @@ just bundle
 | --- | --- |
 | `just check` | Синтаксис shell, компиляция ucode и ShellCheck |
 | `just test` | Все локальные тесты, HTTP/TLS, проверка кэша и отсутствия fork в UI и самопроверка обвязки эмулятора |
-| `just bundle` | Тесты и сборка `dist/just-zapret-manager.sh` |
+| `just bundle` | Тесты и сборка только кода JZM |
+| `just dist` | Тесты, код JZM и отдельный архив `dist/jzm-assets.tar.gz` |
 | `just emulator-setup` | Загрузка эмулятора и подготовка OpenWrt |
 | `just test-e2e` | Сборка и полный прогон на виртуальном роутере |
 
@@ -135,13 +155,16 @@ just bundle
 
 ```text
 src/       ucode-библиотеки, точка входа и shell-бэкенд
-data/      встроенные стратегии, списки и настройки
+data/      исходные данные для сборки архива ассетов
 tools/     сборка, установщик и инструменты разработки
 tests/     наборы тестов, mocks/, setup/ и fixtures/ (см. tests/README.md)
-dist/      готовый читаемый скрипт для роутера
+dist/      читаемый код JZM и отдельный архив ассетов
 ```
 
-Готовая сборка содержит исходники и данные обычным текстом; распаковка при запуске не нужна.
+Исполняемая сборка содержит только код. Данные находятся в отдельном архиве,
+который распаковывается при установке; обычный запуск ничего не распаковывает.
+Для сборки релиза нужен интернет на компьютере сборки. `just test` использует
+локальный архив фикстур и не обращается к upstream за ресурсами.
 Пользовательский вход — `jzm` без аргументов. Для тестов и автоматизации существует
 внутренний протокол: `JZM_MODE=command /usr/bin/jzm <команда>`.
 Перед изменениями прочитайте [AGENTS.md](AGENTS.md); дополнительная матрица ucode запускается через `sh tools/test-matrix.sh`.
@@ -149,8 +172,7 @@ dist/      готовый читаемый скрипт для роутера
 ## Благодарности
 
 - [bol-van/zapret](https://github.com/bol-van/zapret) — ядро обхода DPI.
-- [StressOzz/Zapret-Manager](https://github.com/StressOzz/Zapret-Manager) — исходный менеджер, каталог стратегий и списки.
-- [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) — пресеты Flowseal.
+- [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) — единственный источник внешних ассетов: пресеты, бинарные фейки, доменные списки и адреса проверок.
 - [remittor/zapret-openwrt](https://github.com/remittor/zapret-openwrt) — пакеты Zapret и LuCI для OpenWrt.
 - [stavultras/router-emulator](https://github.com/stavultras/router-emulator) — виртуальный роутер для E2E.
 - [OpenWrt](https://openwrt.org/) и [ucode](https://github.com/ucode-lang/ucode) — платформа и инструменты.

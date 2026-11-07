@@ -34,6 +34,6 @@ uninstall_manager() {
     cmp "$root/uninstall-config.before" "$conf"
     reject uci -q get firewall.jzm_quic
     health
-    JZM_MODE='command' sh /tmp/just-zapret-manager.sh manager-install
+    JZM_MODE='command' sh /tmp/just-zapret-manager.sh manager-install /tmp/jzm-assets.tar.gz
     test -x /usr/bin/jzm
 }

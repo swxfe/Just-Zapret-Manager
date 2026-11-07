@@ -6,7 +6,7 @@ if [ "${JZM_NATIVE_ATOM:-0}" = 1 ]; then step=''; fi
 case "$step" in
 dynamic-abort) backend state-write exported.txt; exit 73;;
 asset-abort|asset-commit|asset-reset)
-    backend resource-write test.bin
+    backend asset-file "$ZM_TEST_ROOT/opt/zapret/fakes/test.bin"
     if [ "$JZM_SAFETY_STEP" = asset-reset ]; then /bin/sh "$ZM_HOME/src/shell/backend.sh" reset "$ZM_TEST_ROOT" zapret; fi
     [ "$JZM_SAFETY_STEP" != asset-abort ] || exit 73
     exit 0;;

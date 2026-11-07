@@ -53,6 +53,10 @@ cli() {
         JZM_MODE='command' sh "$ZM_HOME/src/launcher.sh" --config "$work/manager.json" "$@"
     fi
 }
+JZM_ASSETS_ARCHIVE=${JZM_ASSETS_ARCHIVE:-$ZM_HOME/.test-tmp/jzm-assets-fixture.tar.gz}
+export JZM_ASSETS_ARCHIVE
+if [ ! -f "$JZM_ASSETS_ARCHIVE" ]; then python3 tools/build-assets.py --fixtures --output "$JZM_ASSETS_ARCHIVE" >/dev/null; fi
+cli assets-install "$JZM_ASSETS_ARCHIVE" >/dev/null
 statefile=$ZM_TEST_ROOT/etc/zapret-manager/state.json
 check_applied() {
     ucode -S -L "$ZM_HOME/src/lib" -D "cfg=$work/manager.json" -e '

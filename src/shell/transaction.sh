@@ -57,13 +57,6 @@ reset_all() {
             fi
         done
     fi
-    if [ -f "$lock/created_fakes" ]; then
-        while IFS= read -r fake; do
-            case "$fake" in ''|*[!A-Za-z0-9_.-]*|.*) return 1;; esac
-            rm -f "$base/files/fake/$fake" || return 1
-        done < "$lock/created_fakes"
-        rm -f "$lock/created_fakes" || return 1
-    fi
     journal=''
     if [ -f "$lock/changed" ]; then journal=$(cat "$lock/changed") || return 1; fi
     force_restore=0
@@ -155,7 +148,7 @@ finish() {
         fi
     fi
     if [ "$rc" = 0 ] && [ "${JZM_REPORT_CHANGE:-0}" = 1 ] &&
-       { [ -s "$lock/changed" ] || [ -s "$lock/created_fakes" ] || [ -f "$lock/service.touched" ] ||
+       { [ -s "$lock/changed" ] || [ -f "$lock/service.touched" ] ||
          [ -f "$lock/firewall.touched" ] || [ -f "$lock/cron.before" ] || [ -f "$lock/cron.absent" ]; }; then rc=10; fi
     if ! cleanup_staged; then
         printf 'zapret-manager: не удалось очистить временные файлы; снимок: %s\n' "$lock" >&2

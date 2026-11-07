@@ -30,8 +30,9 @@ export function domains(text, limit) {
         offset += end == -1 ? length(window) : end + 1;
         let name = lc(trim(split(raw, '#')[0]));
         if (!length(name)) continue;
-        check(length(name) <= 253 && index(name, '.') != -1, 'неверный домен: ' + name);
-        for (let label in split(name, '.'))
+        let dns = substr(name, 0, 1) == '^' ? substr(name, 1) : name;
+        check(length(dns) <= 253 && index(dns, '.') != -1, 'неверный домен: ' + name);
+        for (let label in split(dns, '.'))
             check(length(label) <= 63 && match(label, label_pattern), 'неверный домен: ' + name);
         if (!exists(seen, name)) {
             seen[name] = true;

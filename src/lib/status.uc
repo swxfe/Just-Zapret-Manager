@@ -72,6 +72,7 @@ export function inspect_strategy(body, list) {
     let sections = strategy_sections(body), references = [], by_name = {}, overrides = {};
     let wanted = {};
     for (let section in sections) wanted[strategy_key(section.label)] = true;
+    let voice_override = false;
     let labelled = length(filter(sections, (s) => s.label == null)) == 0;
     for (let candidate in list) {
         let name = strategy_key(candidate.name);
@@ -84,7 +85,10 @@ export function inspect_strategy(body, list) {
     // Arbitrary changes to the remaining Flowseal parameters still fail comparison.
     for (let section in sections) {
         let name = strategy_key(section.label), ref = by_name[name], group = strategy_group(name);
-        if (group && ref && ref.body == section.body && !section.boundary_missing) overrides[group] = true;
+        if (group && ref && ref.body == section.body && !section.boundary_missing) {
+            overrides[group] = true;
+            if (match(name, /^discord_general/)) voice_override = true;
+        }
     }
     let result = [];
     for (let section in sections) {
@@ -92,7 +96,7 @@ export function inspect_strategy(body, list) {
             let name = strategy_key(section.label), ref = by_name[name];
             let exact = ref && ref.body == section.body;
             if (!exact && ref && match(name, /^general(_|$)/)) {
-                let remaining = filter(split(ref.body, '--new\n'), (block) => !overrides[profile_group(block)]);
+                let remaining = filter(split(ref.body, '--new\n'), (block) => !overrides[profile_group(block, voice_override)]);
                 exact = join('--new\n', remaining) == section.body;
             }
             push(result, { name, body: section.body, changed: !exact || section.boundary_missing });
@@ -130,7 +134,7 @@ export function identify_strategy(body, list, state) {
 export function reference_catalog(ctx, wanted) {
     let list = [];
     for (let kind in ['flowseal', 'manager']) {
-        let path = ctx.state + '/' + kind + '.json';
+        let path = ctx.assets + '/catalogs/' + kind + '.json';
         if (!fs.stat(path)) continue;
         try { list = [...list, ...parse_catalog(ctx, cached(ctx, 'source-document:' + path, () => json(read(path, ctx.max_file_bytes))).catalog, wanted)]; }
         catch (e) { /* Invalid cached presets cannot hide the actual configuration. */ }

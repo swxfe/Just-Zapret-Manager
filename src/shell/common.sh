@@ -79,8 +79,8 @@ managed_path() {
         1) host_path user; managed_file=$host_file;;
         2) host_path exclude; managed_file=$host_file;;
         3) host_path google; managed_file=$host_file;;
-        4) managed_file=$root/etc/zapret-manager/manager.json;;
-        5) managed_file=$root/etc/zapret-manager/flowseal.json;;
+        4) managed_file=$root/etc/zapret-manager/assets/manifest.json;;
+        5) managed_file=$root/etc/zapret-manager/assets/catalogs/flowseal.json;;
         6) managed_file=$root/etc/zapret-manager/devices.txt;;
         7) managed_file=$base/init.d/openwrt/custom.d/20-jzm-exclude.sh;;
         8) managed_file=$root/etc/config/firewall;;

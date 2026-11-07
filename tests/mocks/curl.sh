@@ -44,16 +44,6 @@ if [ -f "$ZM_TEST_ROOT/pause-probe" ]; then
     rm -f "$ZM_TEST_ROOT/pause-probe"
 fi
 if [ "$out" != /dev/null ]; then
-    if [ -f "$ZM_TEST_ROOT/mock-sources" ]; then
-        case "$url" in
-            https://api.github.com/repos/*/commits/*) printf '{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' > "$out"; exit 0;;
-            */Zapret-Manager.sh) cat "$ZM_HOME/tests/fixtures/manager.txt" > "$out"; exit 0;;
-            */files/StrYoutube) cat "$ZM_HOME/tests/fixtures/youtube.txt" > "$out"; exit 0;;
-            */git/trees/*) printf '{"tree":[{"type":"blob","path":"general.bat"}],"truncated":false}' > "$out"; exit 0;;
-            */general.bat) cat "$ZM_HOME/tests/fixtures/flowseal.bat" > "$out"; exit 0;;
-            */bin/*.bin) printf 'FAKE-BLOB-FIXTURE' > "$out"; exit 0;;
-        esac
-    fi
     cat "$ZM_TEST_ROOT/download" > "$out"
     exit 0
 fi

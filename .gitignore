@@ -1,5 +1,7 @@
 /dist/*
 !/dist/just-zapret-manager.sh
+!/dist/Zapret-Manager.sh
+!/dist/jzm-assets.tar.gz
 /.test-tmp/
 *.out
 /.emulator/

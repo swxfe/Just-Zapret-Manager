@@ -1,5 +1,5 @@
 import { equal, rejects, count } from '../support/assertions.uc';
-import { github_response } from 'sources';
+import { github_response } from 'releases';
 
 export function run() {
     equal(github_response('200\n59\n{"sha":"test"}'), '{"sha":"test"}', 'GitHub success body');

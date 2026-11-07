@@ -1,5 +1,5 @@
 #!/bin/sh
-# JZM_VERSION=0.1.3
+# JZM_VERSION=0.1.4
 # JZM_FORMAT=2
 # Generated from src/. This file contains readable shell and ucode source.
 set -eu
@@ -94,8 +94,8 @@ managed_path() {
         1) host_path user; managed_file=$host_file;;
         2) host_path exclude; managed_file=$host_file;;
         3) host_path google; managed_file=$host_file;;
-        4) managed_file=$root/etc/zapret-manager/manager.json;;
-        5) managed_file=$root/etc/zapret-manager/flowseal.json;;
+        4) managed_file=$root/etc/zapret-manager/assets/manifest.json;;
+        5) managed_file=$root/etc/zapret-manager/assets/catalogs/flowseal.json;;
         6) managed_file=$root/etc/zapret-manager/devices.txt;;
         7) managed_file=$base/init.d/openwrt/custom.d/20-jzm-exclude.sh;;
         8) managed_file=$root/etc/config/firewall;;
@@ -196,13 +196,6 @@ reset_all() {
             fi
         done
     fi
-    if [ -f "$lock/created_fakes" ]; then
-        while IFS= read -r fake; do
-            case "$fake" in ''|*[!A-Za-z0-9_.-]*|.*) return 1;; esac
-            rm -f "$base/files/fake/$fake" || return 1
-        done < "$lock/created_fakes"
-        rm -f "$lock/created_fakes" || return 1
-    fi
     journal=''
     if [ -f "$lock/changed" ]; then journal=$(cat "$lock/changed") || return 1; fi
     force_restore=0
@@ -294,7 +287,7 @@ finish() {
         fi
     fi
     if [ "$rc" = 0 ] && [ "${JZM_REPORT_CHANGE:-0}" = 1 ] &&
-       { [ -s "$lock/changed" ] || [ -s "$lock/created_fakes" ] || [ -f "$lock/service.touched" ] ||
+       { [ -s "$lock/changed" ] || [ -f "$lock/service.touched" ] ||
          [ -f "$lock/firewall.touched" ] || [ -f "$lock/cron.before" ] || [ -f "$lock/cron.absent" ]; }; then rc=10; fi
     if ! cleanup_staged; then
         printf 'zapret-manager: не удалось очистить временные файлы; снимок: %s\n' "$lock" >&2
@@ -629,1334 +622,25 @@ import * as ubus from 'ubus';
 import { sha256 } from 'digest';
 import * as uclient from 'uclient';
 import * as uloop from 'uloop';
-const EMBEDDED_STRATEGIES = `
-#v1
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=split2
---dpi-desync-split-seqovl=681
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin
-#v2
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=fake,multisplit
---dpi-desync-split-seqovl=681
---dpi-desync-split-pos=1
---dpi-desync-fooling=ts
---dpi-desync-repeats=8
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
-#v3
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=hostfakesplit
---dpi-desync-hostfakesplit-mod=host=ozon.ru
---dpi-desync-repeats=4
---dpi-desync-fooling=ts,md5sig
---dpi-desync-badseq-increment=0
-#v4
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=multisplit
---dpi-desync-split-seqovl=582
---dpi-desync-split-pos=1
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin
-#v5
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=fake,fakeddisorder
---dpi-desync-split-pos=1
---dpi-desync-fake-tls=/opt/zapret/files/fake/stun.bin
---dpi-desync-fake-tls-mod=none
---dpi-desync-fakedsplit-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fooling=badseq,badsum
---dpi-desync-badseq-increment=0
-#v6
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=hostfakesplit
---dpi-desync-hostfakesplit-mod=host=i2.photo.2gis.com
---dpi-desync-hostfakesplit-midhost=host-2
---dpi-desync-split-seqovl=726
---dpi-desync-fooling=badsum,badseq
---dpi-desync-badseq-increment=0
-#v7
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=fake,multisplit
---dpi-desync-split-seqovl=654
---dpi-desync-split-pos=1
---dpi-desync-fooling=badseq,badsum
---dpi-desync-repeats=8
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin
---dpi-desync-fake-tls=/opt/zapret/files/fake/stun.bin
---dpi-desync-badseq-increment=0
-#v8
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=fake
---dpi-desync-fooling=ts
---dpi-desync-fake-tls=/opt/zapret/files/fake/4pda.bin
---dpi-desync-fake-tls-mod=none
-#v9
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=hostfakesplit
---dpi-desync-fooling=badseq,badsum
---dpi-desync-hostfakesplit-mod=host=ozon.ru
---dpi-desync-badseq-increment=0
-#v10
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=fake,split2
---dpi-desync-split-pos=2
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-hostfakesplit-mod=host=maxcdn.bootstrapcdn.com
---dpi-desync-fake-tls-mod=rnd,sni=maxcdn.bootstrapcdn.com
---dpi-desync-fooling=ts
-#Dv1
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=multisplit
---dpi-desync-split-seqovl=652
---dpi-desync-split-pos=2
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Dv2
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake,multisplit
---dpi-desync-split-seqovl=681
---dpi-desync-split-pos=1
---dpi-desync-fooling=ts
---dpi-desync-repeats=8
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
-#Dv3
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake
---dpi-desync-repeats=6
---dpi-desync-fooling=ts
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=none
-#Dv4
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=multisplit
---dpi-desync-split-seqovl=652
---dpi-desync-split-pos=2
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Dv5
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake,multisplit
---dpi-desync-repeats=6
---dpi-desync-fooling=badseq
---dpi-desync-badseq-increment=1000
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Dv6
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=multisplit
---dpi-desync-split-seqovl=681
---dpi-desync-split-pos=1
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Dv7
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=multisplit
---dpi-desync-split-pos=2,sniext+1
---dpi-desync-split-seqovl=679
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Dv8
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake
---dpi-desync-fake-tls-mod=none
---dpi-desync-repeats=6
---dpi-desync-fooling=badseq
---dpi-desync-badseq-increment=2
-#Dv9
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake,fakedsplit
---dpi-desync-split-pos=1
---dpi-desync-fooling=badseq
---dpi-desync-badseq-increment=2
---dpi-desync-repeats=8
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
-#Dv10
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake,multisplit
---dpi-desync-split-seqovl=681
---dpi-desync-split-pos=1
---dpi-desync-fooling=badseq
---dpi-desync-badseq-increment=10000000
---dpi-desync-repeats=8
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
-#Dv11
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake,multisplit
---dpi-desync-split-seqovl=681
---dpi-desync-split-pos=1
---dpi-desync-fooling=ts
---dpi-desync-repeats=8
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
-#Dv12
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake
---dpi-desync-repeats=6
---dpi-desync-fooling=badseq
---dpi-desync-badseq-increment=2
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Dv13
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake
---dpi-desync-repeats=6
---dpi-desync-fooling=ts
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Dv14
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake,fakedsplit
---dpi-desync-repeats=6
---dpi-desync-fooling=ts
---dpi-desync-fakedsplit-pattern=0x00
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Dv15
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake,multidisorder
---dpi-desync-split-pos=1,midsld
---dpi-desync-repeats=11
---dpi-desync-fooling=badseq
---dpi-desync-fake-tls=0x00000000
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
-#Dv16
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=fake,hostfakesplit
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
---dpi-desync-hostfakesplit-mod=host=www.google.com,altorder=1
---dpi-desync-fooling=ts
-#Dv17
---filter-tcp=2053,2083,2087,2096,8443
---hostlist-domains=discord.media
---dpi-desync=hostfakesplit
---dpi-desync-repeats=4
---dpi-desync-fooling=ts
---dpi-desync-hostfakesplit-mod=host=www.google.com
-#Yv01
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---ip-id=zero
---dpi-desync=multisplit
---dpi-desync-split-seqovl=681
---dpi-desync-split-pos=1
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Yv02
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=multisplit
---dpi-desync-split-pos=1,sniext+1
---dpi-desync-split-seqovl=1
-#Yv03
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fake,multisplit
---dpi-desync-split-pos=2,sld
---dpi-desync-fake-tls=0x0F0F0F0F
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=ggpht.com
---dpi-desync-split-seqovl=620
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fooling=badsum,badseq
-#Yv04
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=split2
---dpi-desync-split-seqovl=681
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Yv05
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fake,fakeddisorder
---dpi-desync-split-pos=10,midsld
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=fonts.google.com
---dpi-desync-fake-tls=0x0F0F0F0F
---dpi-desync-fake-tls-mod=none
---dpi-desync-fakedsplit-pattern=/opt/zapret/files/fake/tls_clienthello_vk_com.bin
---dpi-desync-split-seqovl=336
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_gosuslugi_ru.bin
---dpi-desync-fooling=badseq,badsum
---dpi-desync-badseq-increment=0
-#Yv06
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=multidisorder
---dpi-desync-split-pos=7,sld+1
---dpi-desync-fake-tls=0x0F0F0F0F
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
---dpi-desync-fooling=badseq
---dpi-desync-autottl=2:2-12
-#Yv07
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=multidisorder
---dpi-desync-split-pos=1,midsld,endhost-1
---dpi-desync-repeats=2
---dpi-desync-fooling=md5sig
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
-#Yv08
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=hostfakesplit
---dpi-desync-hostfakesplit-mod=host=google.com
---dpi-desync-fooling=ts
-#Yv09
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync-repeats=6
---dpi-desync-fooling=badseq
---dpi-desync-badseq-increment=2
---dpi-desync=multidisorder
---dpi-desync-split-pos=1,midsld
---dpi-desync-fake-quic=/opt/zapret/files/fake/quic_initial_www_google_com.bin
-#Yv10
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=multisplit
---dpi-desync-split-pos=1,2
---dpi-desync-split-seqovl=4
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
-#Yv11
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=multidisorder
---dpi-desync-split-pos=2,5,105,host+5,sld-1,endsld-5,endsld
-#Yv12
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=multidisorder
---dpi-desync-split-pos=1,midsld
---dpi-desync-repeats=2
-#Yv13
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fake,multidisorder
---dpi-desync-split-seqovl=681
---dpi-desync-split-pos=1
---dpi-desync-fooling=badseq
---dpi-desync-badseq-increment=10000000
---dpi-desync-repeats=2
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=fonts.google.com
-#Yv14
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fake,multidisorder
---dpi-desync-split-pos=10,midsld
---dpi-desync-fake-tls=0x00000000
---dpi-desync-fake-tls=0x0F0F0F0F
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=fonts.google.com
---dpi-desync-split-seqovl=336
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fooling=badseq
-#Yv15
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fake,multisplit
---dpi-desync-split-pos=2,sld
---dpi-desync-fake-tls=0x0F0F0F0F
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=ggpht.com
---dpi-desync-split-seqovl=2108
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fooling=badsum,badseq
-#Yv16
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=multisplit
---dpi-desync-split-pos=1,sniext+1
---dpi-desync-split-seqovl=1
---dpi-desync-fooling=badsum,badseq
---dpi-desync-badseq-increment=0
-#Yv17
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fakeddisorder
---dpi-desync-fooling=md5sig
---dup=1
---dup-cutoff=n2
---dup-fooling=md5sig
---dpi-desync-split-pos=method+2
-#Yv18
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---ip-id=zero
---dpi-desync=fake,hostfakesplit
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
---dpi-desync-hostfakesplit-mod=host=www.google.com,altorder=1
---dpi-desync-fooling=ts
-#Yv19
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fake,multisplit
---dpi-desync-fake-tls=0x00000000
---dpi-desync-fake-tls=!
---dpi-desync-split-pos=1,midsld
---dpi-desync-repeats=2
---dpi-desync-fooling=badseq
---dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
-#Yv20
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---ip-id=zero
---dpi-desync=fake,fakedsplit
---dpi-desync-repeats=6
---dpi-desync-fooling=ts
---dpi-desync-fakedsplit-pattern=0x00
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Yv21
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---ip-id=zero
---dpi-desync=fake,multisplit
---dpi-desync-split-seqovl=681
---dpi-desync-split-pos=1
---dpi-desync-fooling=ts
---dpi-desync-repeats=8
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
-#Yv22
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=split2
---dpi-desync-split-pos=1
---dpi-desync-split-seqovl=681
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin
-#Yv23
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fake,fakeddisorder
---dpi-desync-split-pos=1
---dpi-desync-fake-tls=/opt/zapret/files/fake/stun.bin
---dpi-desync-fake-tls-mod=none
---dpi-desync-fakedsplit-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---dpi-desync-fooling=badseq,badsum
---dpi-desync-badseq-increment=0
-#Yv24
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fake,multisplit
---dpi-desync-split-seqovl=654
---dpi-desync-split-pos=1
---dpi-desync-fooling=badseq,badsum
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin
---dpi-desync-fake-tls=/opt/zapret/files/fake/stun.bin
---dpi-desync-badseq-increment=0
-#Yv25
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=hostfakesplit
---dpi-desync-fooling=badseq,badsum
---dpi-desync-hostfakesplit-mod=host=google.com
---dpi-desync-badseq-increment=0
-#Yv26
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=multidisorder
---dpi-desync-split-pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1
-#Yv27
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=multidisorder
---dpi-desync-split-pos=1,2,3,5,105,host+5,sld-1,endsld-5,endsld
---dpi-desync-fooling=badsum
-#Yv28
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fake,multidisorder
---dpi-desync-split-seqovl=midsld-4
---dpi-desync-split-pos=2,midsld+3,sniext+2,endhost-2,midsld-3,host+1,-10
---dpi-desync-fooling=ts
---dpi-desync-repeats=23
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_sferum_ru.bin
---dpi-desync-fake-tls=/opt/zapret/files/fake/stun2.bin
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_sferum_ru.bin
---dpi-desync-fake-tls=/opt/zapret/files/fake/stun.bin
---dpi-desync-fake-http=/opt/zapret/files/fake/tls_clienthello_max_ru.bin
-#Yv29
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=hostfakesplit
---dpi-desync-fooling=ts
---dpi-desync-hostfakesplit-mod=host=www.google.com
---dpi-desync-hostfakesplit-midhost=midsld+1
-#Yv30
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=hostfakesplit
---dpi-desync-fooling=ts
---dpi-desync-hostfakesplit-mod=host=www.google.com
---dpi-desync-hostfakesplit-midhost=sld+1
-#Yv31
---filter-tcp=443
---hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
---dpi-desync=fake,multisplit
---dpi-desync-split-seqovl=717
---dpi-desync-split-pos=sld,sld+3,endhost-1
---dpi-desync-fooling=ts
---dpi-desync-repeats=8
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com_2.bin
---dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com_2.bin
-#Yv32
---filter-tcp=443
---hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
---dpi-desync=hostfakesplit
---dpi-desync-hostfakesplit-mod=host=ozon.ru
---dpi-desync-repeats=4
---dpi-desync-fooling=ts,md5sig
---dpi-desync-badseq-increment=0
-#Gv1
---filter-udp=88,1024-2407,2409-4499,4502-19293,19345-49999,50101-65535
---dpi-desync=fake
---dpi-desync-cutoff=d2
---dpi-desync-any-protocol=1
---dpi-desync-fake-unknown-udp=/opt/zapret/files/fake/stun.bin
---new
---filter-tcp=2099,2802,2302,2502,3478-3480,3724,6000-8000,8085,8090,8100,8903,8904,25565,27015-27030,27036-27037,35500-35600,50001,60442
---dpi-desync-any-protocol=1
---dpi-desync-cutoff=n5
---dpi-desync=multisplit
---dpi-desync-split-seqovl=582
---dpi-desync-split-pos=1
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin
-#Gv2
---filter-udp=88,1024-2407,2409-4499,4502-19293,19345-49999,50101-65535
---dpi-desync=fake
---dpi-desync-repeats=10
---dpi-desync-any-protocol=1
---dpi-desync-fake-unknown-udp=/opt/zapret/files/fake/stun.bin
---dpi-desync-cutoff=n2
---new
---filter-tcp=2099,2802,2302,2502,3478-3480,3724,6000-8000,8085,8090,8100,8903,8904,25565,27015-27030,27036-27037,35500-35600,50001,60442
---dpi-desync-any-protocol=1
---dpi-desync-cutoff=n5
---dpi-desync=multisplit
---dpi-desync-split-seqovl=582
---dpi-desync-split-pos=1
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin
-#Gv3
---filter-udp=88,1024-2407,2409-4499,4502-19293,19345-49999,50101-65535
---dpi-desync=fake
---dpi-desync-repeats=10
---dpi-desync-any-protocol=1
---dpi-desync-fake-unknown-udp=/opt/zapret/files/fake/stun.bin
---dpi-desync-cutoff=n3
---new
---filter-tcp=2099,2802,2302,2502,3478-3480,3724,6000-8000,8085,8090,8100,8903,8904,25565,27015-27030,27036-27037,35500-35600,50001,60442
---dpi-desync-any-protocol=1
---dpi-desync-cutoff=n5
---dpi-desync=multisplit
---dpi-desync-split-seqovl=582
---dpi-desync-split-pos=1
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin
-#Gv4
---filter-udp=88,1024-2407,2409-4499,4502-19293,19345-49999,50101-65535
---dpi-desync=fake
---dpi-desync-repeats=10
---dpi-desync-any-protocol=1
---dpi-desync-fake-unknown-udp=/opt/zapret/files/fake/stun.bin
---dpi-desync-cutoff=n4
---new
---filter-tcp=2099,2802,2302,2502,3478-3480,3724,6000-8000,8085,8090,8100,8903,8904,25565,27015-27030,27036-27037,35500-35600,50001,60442
---dpi-desync-any-protocol=1
---dpi-desync-cutoff=n5
---dpi-desync=multisplit
---dpi-desync-split-seqovl=582
---dpi-desync-split-pos=1
---dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin
-`;
-const EMBEDDED_CONFIG = {
-  "root": "/",
-  "connect_timeout": 4,
-  "request_timeout": 10,
-  "settle_seconds": 2,
-  "max_file_bytes": 2097152,
-  "max_domains": 50000,
-  "max_strategies": 256,
-  "max_urls": 64,
-  "hostlist_urls": {
-    "exclude": "https://raw.githubusercontent.com/StressOzz/Zapret-Manager/main/zapret-hosts-user-exclude.txt"
-  },
-  "updater": {
-    "repo": "swxfe/just-zapret-manager",
-    "branch": "main",
-    "path": "dist/just-zapret-manager.sh"
-  }
-};
-const EMBEDDED_DATA = {};
-EMBEDDED_DATA["sources.json"] = `{
-  "manager_repo": "StressOzz/Zapret-Manager",
-  "flowseal_repo": "Flowseal/zapret-discord-youtube",
-  "installer_repo": "remittor/zapret-openwrt",
-  "branch": "main",
-  "tcp_ports": "2099,2802,2302,2502,3478-3480,3724,6000-8000,8085,8090,8100,8903,8904,25565,27015-27030,27036-27037,35500-35600,50001,60442",
-  "udp_ports": "88,1024-2407,2409-4499,4502-19293,19345-49999,50101-65535",
-  "fake_aliases": {
-    "ACTIVE_DISCORD_UDP.bin": "quic_initial_steamcommunity_com.bin",
-    "ACTIVE_GAME_UDP.bin": "quic_initial_4pda_to.bin",
-    "tls_clienthello_4pda_to.bin": "4pda.bin",
-    "tls_clienthello_max_ru.bin": "tls_clienthello_www_onetrust_com.bin"
-  }
-}
-`;
-EMBEDDED_DATA["network.json"] = `{
-  "family": "inet",
-  "table": "zapret",
-  "chain": "postrouting_hook",
-  "mark": "0x40000000"
-}
-`;
-EMBEDDED_DATA["google.txt"] = `youtube.com
-youtu.be
-googlevideo.com
-ytimg.com
-ggpht.com
-youtubei.googleapis.com
-youtubei.youtube.com
-gvt1.com
-gvt2.com
-googleplay.com
-play.google.com
-play.googleapis.com
-googleusercontent.com
-`;
-EMBEDDED_DATA["exclude.txt"] = `skytunnel.pw
-ru
-by
-рф
-su
-xn--p1ai
-xn--p1acf
-xn--80aswg
-xn--d1acj3b
-xn--80adxhks
-xn--80asehdb
-#################################### Разное
-z.ai
-hf.co
-box.ca
-2ip.io
-uc.zone
-msi.com
-qwen.ai
-iiko.it
-okko.tv
-ripe.net
-ktalk.ru
-avito.st
-habr.com
-vibio.tv
-ali.click
-nexon.com
-tenor.com
-boosty.to
-ottai.com
-ufanet.tv
-apple.com
-gudsen.vip
-whatbox.ca
-trovo.live
-beeline.tv
-ubuntu.com
-xsolla.com
-ip-api.com
-yandex.com
-yandex.org
-yandex.net
-chatglm.cn
-gudsen.vip
-pantum.com
-gstatic.com
-lichess.org
-premier.one
-teclast.com
-wws-gs2.com
-dropbox.com
-genesis.com
-carcade.com
-midnight.im
-easy4ip.com
-senkuro.com
-ibyteimg.com
-duolingo.com
-duolingo.cn
-map-care.com
-gravatar.com
-battleye.com
-opencity.pro
-ipstream.one
-godville.net
-voidboost.cc
-hcaptcha.com
-gigabyte.com
-bambulab.com
-skillbox.pro
-tarantool.io
-kalay.net.cn
-fanatical.com
-mchose.com.cn
-voidboost.one
-kaspersky.com
-canonical.com
-mediafire.com
-huggingface.co
-mozaracing.com
-vivoglobal.com
-dolynkcloud.com
-libreoffice.org
-payguide.online
-wanttopay.cloud
-easy4ipcloud.com
-feralhosting.com
-moondroplab.tech
-iotcplatform.com
-dahuasecurity.com
-rockstargames.com
-docs.altlinux.org
-battleye.b-cdn.net
-download.nvidia.com
-tiktoklinksafety.com
-documentfoundation.org
-marketplace.visualstudio.com
-supporter-files.nexus-cdn.com
-#################################### VK
-vk.cc
-vk.me
-vk.com
-my.com
-mvk.com
-vk.link
-vk.team
-vkgo.app
-skbx.pro
-youla.io
-nyphy.io
-mycdn.me
-mradx.net
-vk-cdn.me
-vk.design
-vk-cdn.net
-vk.company
-vklive.app
-vkuser.net
-vknext.net
-bizmrg.com
-userapi.com
-vk-apps.com
-vkcache.com
-vkclips.app
-vk-portal.net
-vkuserlive.net
-vkmessenger.app
-vkmessenger.com
-vkuseraudio.com
-vkuseraudio.net
-vkuservideo.com
-vkuservideo.net
-#################################### Epicgames
-easy.ac
-fab.com
-quixel.se
-quixel.com
-eac-cdn.com
-paragon.com
-spyjinx.com
-3lateral.com
-fortnite.com
-epicgames.com
-epicgames.dev
-hyprsense.com
-sketchfab.com
-artstation.com
-roborecall.com
-twinmotion.com
-cubicmotion.com
-playparagon.com
-realityscan.com
-epicgamescdn.com
-radgametools.com
-unrealengine.com
-easyanticheat.net
-shadowcomplex.com
-battlebreakers.com
-capturingreality.com
-unrealtournament.com
-#################################### Steam
-s.team
-steam.tv
-dota2.com
-valve.net
-clngaa.com
-qtlglb.com
-comcast.net
-steamcdn.com
-steamcdn.net
-steamstat.us
-valvecdn.com
-queniuqe.com
-steam-api.com
-steamchat.com
-steamdeck.com
-edgesuite.net
-steam-chat.com
-steamgames.com
-steamgames.net
-underlords.com
-steamserver.net
-steamstatic.com
-slingshot.co.nz
-playartifact.com
-steam.cdn.on.net
-steamcontent.com
-steampowered.com
-valvecontent.com
-valvesoftware.com
-valvesoftware.net
-steambroadcast.com
-steamcommunity.com
-counter-strike.net
-steamusercontent.com
-gstore.val.manlaxy.com
-__JZM_JZM_UCODE_1__
-)
-export JZM_UCODE_1
-
-JZM_UCODE_2=$(cat <<'__JZM_JZM_UCODE_2__'
-steam.cdn.orcon.net.nz
-steamdeckusercontent.com
-#################################### OpenWRT
-gitlab.io
-github.io
-github.com
-openwrt.org
-lede-project.org
-githubusercontent.com
-#################################### UbisoftConnect
-ubi.com
-uplay.com
-ubisoft.com
-rainbow6.com
-ubisoftconnect.com
-#################################### Aliexpress
-ae.com
-ae-rus.net
-alicdn.com
-aestatic.net
-aliexpress.us
-aliexpress.com
-aliexpress-media.com
-#################################### PSN
-scea.com
-np.scea.com
-ps5update.com
-psdownload.com
-playstation.net
-playstation.com
-account.sony.com
-psremoteplay.com
-playstationcloud.com
-sonyentertainmentnetwork.com
-#################################### Twitch
-twitch.tv
-ttvnw.net
-jtvnw.net
-twitchcdn.net
-ext-twitch.tv
-twitchsvc.net
-live-video.net
-twitch.a2z.com
-twitch-shadow.net
-twitchcdn-shadow.net
-#################################### Valorant
-pvp.net
-vivox.com
-sd-rtn.com
-adjust.com
-riotcdn.net
-adobess.com
-valorant.com
-myqcloud.com
-riotgames.com
-playvalorant.com
-#################################### TikTok
-musical.ly
-tiktok.com
-tiktokv.eu
-tiktokv.us
-tiktokw.eu
-tiktokw.us
-muscdn.com
-tiktokd.net
-tiktokd.org
-tiktokv.com
-tiktokcdn.com
-ibytedtos.com
-ttwstatic.com
-tik-tokapi.com
-tiktok-row.net
-tiktokminis.us
-byteoversea.com
-tiktok-minis.com
-tiktokcdn-eu.com
-tiktokcdn-us.com
-tiktokeu-cdn.com
-tiktokrow-cdn.com
-tiktokglobalshopv.com
-#################################### Hoyoverse
-hoyo.link
-hoyolab.com
-yuanshen.com
-hoyoverse.com
-genshinimpact.com
-honkaiimpact3.com
-zenlesszonezero.com
-#################################### Xiaomi
-mi.com
-miui.com
-wali.com
-c.mi.com
-mgslb.com
-mifile.cn
-xiaomi.cn
-mipay.com
-youpin.cn
-zmifi.com
-70mai.com
-mi-idc.com
-mi-img.com
-mijia.tech
-mitvos.com
-miwifi.com
-xiaomi.com
-xiaomi.net
-duokan.com
-saxyit.com
-mi-fan.com
-mihome.com
-xiaomisa.cn
-migames.com
-miaibox.com
-mi-home.com
-xiaomicp.com
-xiaomidns.cn
-xiaomiev.com
-xiaomiinc.cn
-xiaominr.com
-xiaomisa.com
-xiaomisa.net
-xiaomisa.org
-roborock.com
-mi-robot.com
-yeelight.com
-miot-spec.cn
-xiaomidns.com
-xiaomidns.net
-xiaomiinc.com
-xiaomiinc.net
-duokanbox.com
-youpin.com.cn
-miot-spec.org
-miot-spec.com
-xiaomiwear.com
-xiaomimimo.com
-xiaomiprint.com
-xiaomidns.com.cn
-xiaomiinc.com.cn
-xiaomimobile.com
-xiaomixiaoai.com
-xiaomiyoupin.com
-xiaoaiassist.com
-xiaomi-mijia.com
-xiaomifactory.com
-airstarfinance.net
-#################################### Picooc
-picoocru.com
-picooc-g.com
-picooc-int.com
-#################################### Huawei
-hc-cdn.cn
-huawei.com
-hc-cdn.com
-huawei.net
-hicloud.com
-dbankcdn.com
-dbankcloud.cn
-dbankcloud.com
-huaweicloud.com
-huaweistatic.com
-hwclouds-dns.com
-hwclouds-dns.net
-myhuaweicloud.cn
-myhuaweicloud.com
-huaweicloud-dns.cn
-huaweicloud-dns.com
-huaweicloud-dns.org
-#################################### Delta Force
-gtimg.com
-volces.com
-wetest.net
-tencent.com
-vasdgame.co
-onezapp.com
-intlgame.com
-vasdgame.com
-gcloudcs.com
-fleetlogd.com
-dgameglobal.com
-tdatamaster.com
-tencent-cloud.com
-singaporepaya.com
-playdeltaforce.com
-quovadisglobal.com
-jupiterlauncher.com
-anticheatexpert.com
-#################################### Microsoft
-sfx.ms
-msn.com
-1drv.ms
-live.com
-lync.com
-live.net
-xbox.com
-bing.com
-skype.com
-microsoft
-fabric.io
-msauth.net
-office.net
-office.com
-msocdn.com
-mojang.com
-windows.net
-msftauth.net
-onedrive.com
-microsoft.com
-office365.com
-sharepoint.com
-skypeassets.com
-s-microsoft.com
-windowsupdate.com
-microsoft-tst.com
-microsoftonline.com
-microsoftonline-p.com
-minecraftservices.com
-#################################### Xbox
-xbx.lv
-xbox.co
-xbox.eu
-xbox.org
-xboxab.com
-xbox360.co
-xbox360.eu
-xboxone.co
-xboxone.eu
-xboxnow.com
-xboxera.com
-xbox360.com
-xbox360.org
-xboxlive.cn
-xboxone.com
-gamepass.com
-xboxlive.com
-minecraft.net
-xboxevents.com
-orithegame.com
-xboxrewards.com
-xboxstudios.com
-xboxservices.com
-xboxliveauth.com
-msauthimages.net
-xboxgamepass.com
-tellmewhygame.com
-msftauthimages.net
-xboxusercontent.com
-msftconnecttest.com
-xboxgamestudios.com
-xboxplayanywhere.com
-renovacionxboxlive.com
-microsoftcasualgames.com
-#################################### Arknights: Endfield
-skport.com
-hg-cdn.com
-helpshift.com
-gryphline.com
-#################################### Samsung
-sbixby.com
-secb2b.com
-samsung.com
-bixbyllm.com
-samsungdm.com
-ospserver.net
-samsunggsl.com
-samsungosp.com
-samsungqbe.com
-samsungapps.com
-samsungknox.com
-samsungcloud.com
-samsunghealth.com
-samsungmobile.com
-samsung-sm-ds.com
-samsungcloudplatform.com
-samsungcloudsolution.com
-#################################### Tuya
-tuya.com
-iot334.com
-tuyaeu.com
-lifeaiot.com
-tuyaedge.com
-tuyacloud.com
-smart-life.com
-smartlifeconnect.com
-#################################### TLC
-tcl.com
-tcljd.com
-tclhome.com
-tclclouds.com
-#################################### Call Of Duty
-azure.com
-azureedge.net
-demonware.net
-callofduty.com
-activision.com
-cloudfront.net
-#################################### Amazon
-amazon.dev
-amazon.com
-amazonaws.com
-amazontrust.com
-media-amazon.com
-#################################### Akamai
-akamai.net
-akamaihd.net
-akamaized.net
-akamaiedge.net
-#################################### Reddit
-redd.it
-reddit.com
-redditstatic.com
-redditspace.com
-redditmedia.com
-####################################  LG WebOs
-lge.com
-lgeapi.com
-lgtvsdp.com
-lgappstv.com
-nextlgsdp.com
-lgtvcommon.com
-#################################### Сursor
-cursor.sh
-cursor.com
-cursorapi.com
-todesktop.com
-cursor-cdn.com
-#################################### Warface
-qq.com
-qcloud.com
-#################################### EA Games
-ea.com
-swtor.com
-origin.com
-tnt-ea.com
-easports.com
-eamobile.com
-#################################### IP Camera
-av380.net
-hiseese.com
-icloseli.com
-ucloudcam.com
-#################################### The Finals
-codefusion.technology
-ac-upd.codefusion.technology
-ac-trg.codefusion.technology
-ac-rep.codefusion.technology
-ac-knock.codefusion.technology
-ac-prp-ap.codefusion.technology
-ac-survey.codefusion.technology
-ac-fallback.codefusion.technology
-ac-fileshare.codefusion.technology
-#################################### Wordpress
-wp.com
-9to5mac.com
-wptavern.com
-wordpress.com
-9to5google.com
-techcrunch.com
-#################################### PUBG
-pubg.com
-pubgno1.cn
-pubgtool.com
-kraftonde.com
-pubghelper.com
-pubg1.battleye.com
-playbattlegrounds.com
-#################################### Tumblr
-tmblr.com
-tumblr.com
-#################################### Postman
-postman.com
-getpostman.com
-postmanapp.com
-#################################### Radmin
-radmin.com
-famatech.com
-radmin-vpn.com
-#################################### Black Desert Online
-wellbia.com
-bdocodex.com
-pearl-bdo.com
-pearlabyss.com
-playblackdesert.com
-#################################### bip.com
-bip.ai
-bip.com
-netmera-web.com
-#################################### kino.pub
-cdntogo.net
-cdn2cdn.com
-cdn2site.com
-nearcache.net
-staticpop.net
-digital-cdn.net
-#################################### Dreame
-dreame.tech
-dreametech.com
-dreamehome.com
-dreame-technology.cn
-dreame-technology.com
-#################################### Arena Breakout Infinite
-li.com
-netease.com
-tencent.com
-igamecj.com
-gcloudcs.com
-intlgame.com
-proximabeta.com
-levelinfinite.com
-arenabreakout.com
-arenabreakoutinfinite.com
-#################################### Aniimo
-funplus.com
-guardease.com
-kingsgroupgames.com
-#################################### tp-link
-tp-link.com
-tplinkra.com
-tplinkap.net
-tplinknbu.com
-tplinkdns.com
-tplinkwifi.net
-tplinkcloud.com
-tplinklogin.net
-tplinkrepeater.net
-#################################### Nintendo
-nintendo.com
-nintendo.net
-nintendo.co.jp
-nintendo.com.au
-nintendo.com.uk
-nintendo.com.hk
-nintendo.com.tw
-nintendo.com.cn
-nintendo-europe.com
-#################################### Хmeye
-xmeye.net
-xiongmaitech.com
-#################################### Pico
-picoxr.com
-picovr.com
-#################################### Apple
-me.com
-asto.re
-itun.es
-mac.com
-apple.co
-apple.ru
-apple.com
-appsto.re
-apple.news
-shazam.com
-itunes.com
-icloud.com
-akadns.net
-appleid.com
-itunesu.com
-aaplimg.com
-edgekey.net
-mzstatic.com
-apple-dns.net
-apple-dns.com
-cdn-apple.com
-edgesuite.net
-applemusic.com
-apple-mapkit.com
-apple-studies.com
-apple-cloudkit.com
-services-apple.net
-icloud-content.com
-icloud-sandbox.com
-apple-livephotoskit.com
-axm-usercontent-apple.com
-#################################### Pinterest
-pinimg.com
-pinimg.map.fastly.net
-####################################
-`;
-EMBEDDED_DATA["urls.txt"] = `# Замените/дополните адресами, которые требуется проверить на вашем подключении.
-https://www.youtube.com/
-# Диагностика доступности инфраструктуры Googlevideo (не замер скорости видео).
-https://redirector.googlevideo.com/report_mapping
-https://discord.com/
-`;
-EMBEDDED_DATA['strategies.txt'] = EMBEDDED_STRATEGIES;
-const EMBEDDED_HEADER = "#!/bin/sh\n# JZM_VERSION=0.1.3\n# JZM_FORMAT=2\n# Generated from src/. This file contains readable shell and ucode source.\nset -eu\nJZM_PID=$$\nexport JZM_PID\ncommand -v ucode >/dev/null 2>&1 || {\n    printf '%s\\n' 'jzm: требуется ucode и пакет ucode-mod-fs' >&2\n    exit 127\n}\n[ \"${JZM_MODE:-}\" = command ] || [ \"$#\" -eq 0 ] || {\n    printf '%s\\n' 'Запустите менеджер без аргументов: jzm' >&2\n    exit 2\n}\n";
+const EMBEDDED_HEADER = "#!/bin/sh\n# JZM_VERSION=0.1.4\n# JZM_FORMAT=2\n# Generated from src/. This file contains readable shell and ucode source.\nset -eu\nJZM_PID=$$\nexport JZM_PID\ncommand -v ucode >/dev/null 2>&1 || {\n    printf '%s\\n' 'jzm: требуется ucode и пакет ucode-mod-fs' >&2\n    exit 127\n}\n[ \"${JZM_MODE:-}\" = command ] || [ \"$#\" -eq 0 ] || {\n    printf '%s\\n' 'Запустите менеджер без аргументов: jzm' >&2\n    exit 2\n}\n";
 const EMBEDDED_FOOTER = "# Source is compiled in memory. Separate environment values stay below Linux's\n# per-argument limit; stdin remains available to the terminal menu and blockcheck.\n# This value is ucode source passed as one interpreter argument.\n# shellcheck disable=SC2089\nJZM_BOOTSTRAP='let source = \"\"; for (let i = 1; i <= +getenv(\"JZM_PARTS\"); i++) source += getenv(\"JZM_UCODE_\" + i) + \"\\n\"; loadstring(source, { strict_declarations: true })();'\nZM_HOME=${ZM_HOME:-/}\n# shellcheck disable=SC2090\nexport JZM_BOOTSTRAP ZM_HOME\nexec ucode -S -e \"$JZM_BOOTSTRAP\" -- \"$@\"\n";
 
 // ---- src/lib/resources.uc ----
 
 let resource_cache = {};
+const VERSION = '0.1.4';
 
-const VERSION = '0.1.3';
-
-// The bundler replaces these accessors with references to generated constants.
-function embedded_data() { return EMBEDDED_DATA; };
-function embedded_config() { return EMBEDDED_CONFIG; };
 function embedded_header() { return EMBEDDED_HEADER; };
 function embedded_footer() { return EMBEDDED_FOOTER; };
 
-function resource(home, name) {
-    let data = embedded_data();
-    if (data != null) {
-        if (!exists(data, name)) die('неизвестный встроенный ресурс: ' + name);
-        return data[name];
-    }
-    let path = home + '/data/' + name;
+function resource(directory, name) {
+    if (!match(name, /^[A-Za-z0-9_.-]+$/)) die('неверное имя ресурса');
+    let path = directory + '/' + name;
     if (exists(resource_cache, path)) return resource_cache[path];
-    let body = fs.readfile(path);
-    if (body == null) die('не найден ресурс: ' + name);
+    let st = fs.stat(path);
+    if (st?.type != 'file' || st.size > 2097152) die('ассет не установлен или слишком большой: ' + name);
+    let body = fs.readfile(path, st.size + 1);
+    if (body == null || length(body) != st.size) die('не удалось прочитать ассет: ' + name);
     if (length(resource_cache) >= 16) resource_cache = {};
     resource_cache[path] = body;
     return body;
@@ -2168,11 +852,12 @@ function tx_changed(ctx, path) {
     invalidate(ctx);
 }
 
-function tx_directory(path) {
+function tx_directory(path, mode) {
     let st = fs.lstat(path);
     if (st != null) { tx_check(st.type == 'directory', 'каталог заменён ссылкой или файлом: ' + path); return; }
-    tx_directory(fs.dirname(path));
-    tx_check(fs.mkdir(path, 0700), 'не удалось создать каталог: ' + path);
+    tx_directory(fs.dirname(path), mode);
+    tx_check(fs.mkdir(path, mode ?? 0700), 'не удалось создать каталог: ' + path);
+    if (mode != null) tx_check(fs.chmod(path, mode), 'не удалось задать права каталога: ' + path);
 }
 
 function tx_token() {
@@ -2222,12 +907,7 @@ function tx_put(ctx, path, body, mode, safety, exclusive) {
         tx_check(fs.chmod(temporary, permissions), 'не удалось сохранить права: ' + path);
         tx_changed(ctx, path);
         if (exclusive) safety(ctx, 'backup-publish', [temporary, path]);
-__JZM_JZM_UCODE_2__
-)
-export JZM_UCODE_2
-
-JZM_UCODE_3=$(cat <<'__JZM_JZM_UCODE_3__'
-else tx_check(fs.rename(temporary, path), 'не удалось атомарно заменить: ' + path);
+        else tx_check(fs.rename(temporary, path), 'не удалось атомарно заменить: ' + path);
     }
     catch (e) { if (file != null) file.close(); if (!exclusive) fs.unlink(temporary); die(e.message); }
     return true;
@@ -2371,7 +1051,12 @@ function tx_remove_tree(path, depth) {
     let names = fs.lsdir(path);
     tx_check(names != null && length(names) <= 50000, 'не удалось прочитать каталог удаления: ' + path);
     for (let name in names) tx_remove_tree(path + '/' + name, depth + 1);
-    tx_check(fs.rmdir(path), 'не удалось удалить каталог: ' + path);
+__JZM_JZM_UCODE_1__
+)
+export JZM_UCODE_1
+
+JZM_UCODE_2=$(cat <<'__JZM_JZM_UCODE_2__'
+tx_check(fs.rmdir(path), 'не удалось удалить каталог: ' + path);
 }
 
 function tx_uninstall(ctx, mode, safety) {
@@ -2418,9 +1103,6 @@ function native_send(ctx, action, args, text, safety) {
     case 'state-write':
         tx_check(match(args[0], /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/), 'неверное имя файла');
         path = ctx.state + '/' + args[0]; break;
-    case 'source-write':
-        tx_check(index(['manager', 'flowseal'], args[0]) != -1, 'неизвестный источник');
-        path = ctx.state + '/' + args[0] + '.json'; break;
     case 'device-hook-write': {
         let legacy = ctx.base + '/init.d/openwrt/custom.d/20-script.sh';
         let saved = ctx.state + '/legacy-exclusion-hook.sh';
@@ -2459,15 +1141,7 @@ function native_send(ctx, action, args, text, safety) {
         path = ctx.state + '/manager-config.json';
         if (fs.lstat(path)) return true;
         break;
-    case 'resource-bytes': {
-        tx_check(match(args[0], /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.bin$/) && length(text) > 0 && length(text) <= ctx.max_file_bytes,
-            'неверный bin-ресурс');
-        let path = ctx.base + '/files/fake/' + args[0];
-        if (fs.lstat(path)) return true;
-        tx_append(tx_lock(ctx) + '/created_fakes', args[0] + '\n');
-        tx_put(ctx, path, text, null, safety);
-        return true;
-    }
+    case 'state-assets-manifest': path = ctx.assets + '/manifest.json'; break;
     case 'backup-write': {
         tx_check(length(text) > 0, 'пустая резервная копия');
         let path = args[0], temporary = ctx.root + '/tmp/', backups = ctx.state + '/backups/';
@@ -2492,16 +1166,19 @@ function native_action(ctx, action, args, safety) {
     case 'settle':
         tx_check(length(args) == 1 && type(+args[0]) == 'int' && +args[0] >= 0 && +args[0] <= 60, 'неверный интервал ожидания');
         sleep(+args[0] * 1000); return true;
-    case 'resource-write': {
-        tx_check(match(args[1], /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.bin$/), 'неверное имя bin-ресурса');
-        let path = ctx.base + '/files/fake/' + args[1];
-        if (fs.lstat(path) != null) return true;
+    case 'asset-file': {
+        tx_check(length(args) == 2, 'неверная запись ассета');
+        let target = args[1], asset_prefix = ctx.assets + '/';
+        tx_check((substr(target, 0, length(asset_prefix)) == asset_prefix && !match(target, /(^|\/)\.\.?(\/|$)/)) ||
+            (target == ctx.base + '/fakes/' + fs.basename(target) &&
+             match(fs.basename(target), /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.bin$/)), 'путь вне ассетов');
         let st = fs.stat(args[0]);
-        tx_check(st?.type == 'file' && st.size > 0 && st.size <= ctx.max_file_bytes, 'неверный размер bin-ресурса');
+        tx_check(st?.type == 'file' && st.size <= ctx.max_file_bytes, 'неверный размер ассета');
         let body = fs.readfile(args[0], ctx.max_file_bytes + 1);
-        tx_check(body != null && length(body) == st.size, 'ошибка чтения bin-ресурса');
-        tx_append(tx_lock(ctx) + '/created_fakes', args[1] + '\n');
-        tx_put(ctx, path, body, null, safety);
+        tx_check(body != null && length(body) == st.size, 'ошибка чтения ассета');
+        if (substr(target, 0, length(ctx.base + '/fakes/')) == ctx.base + '/fakes/')
+            tx_directory(fs.dirname(target), 0755);
+        tx_put(ctx, target, body, 0644, safety);
         return true;
     }
     case 'manager-install': {
@@ -2647,14 +1324,21 @@ function invoke(ctx, args) {
 };
 
 function target_text(ctx, file) {
-    return file == '@default' ? resource(ctx.home, 'urls.txt') : read(file, ctx.max_file_bytes);
+    return file == '@default' ? resource(ctx.resources, 'urls.txt') : read(file, ctx.max_file_bytes);
 };
 
 // ---- src/lib/settings.uc ----
 
+
+function default_settings() {
+    return { root: '/', connect_timeout: 4, request_timeout: 10, settle_seconds: 2,
+        max_file_bytes: 2097152, max_domains: 50000, max_strategies: 256, max_urls: 64,
+        updater: { repo: 'swxfe/just-zapret-manager', branch: 'main', path: 'dist/just-zapret-manager.sh' } };
+};
+
 function settings(home, file) {
     file = file || (fs.stat('/etc/zapret-manager/manager-config.json') ? '/etc/zapret-manager/manager-config.json' : null);
-    let c = file ? json(read(file, 65536)) : (embedded_config() || json(read(home + '/data/manager.json', 65536)));
+    let c = file ? json(read(file, 65536)) : default_settings();
     c = json(sprintf('%J', c));
     check(type(c) == 'object', 'manager.json: ожидается объект');
     let allowed = ['root', 'updater', 'connect_timeout', 'request_timeout',
@@ -2674,27 +1358,24 @@ function settings(home, file) {
     check(c.connect_timeout <= c.request_timeout && c.request_timeout <= 300 &&
           c.settle_seconds <= 60 && c.max_strategies <= 1024 && c.max_urls <= 256,
           'таймауты или лимиты превышены');
-__JZM_JZM_UCODE_3__
-)
-export JZM_UCODE_3
-
-JZM_UCODE_4=$(cat <<'__JZM_JZM_UCODE_4__'
-check(type(c.hostlist_urls) == 'object', 'hostlist_urls: ожидается объект');
-    for (let key, url in c.hostlist_urls) {
-        check(index(['user', 'exclude', 'google'], key) != -1, 'неизвестный список: ' + key);
-        check(type(url) == 'string' && match(url, /^https:\/\/[^[:space:]]+$/), 'URL списка должен быть HTTPS');
+    if (c.hostlist_urls != null) {
+        check(type(c.hostlist_urls) == 'object', 'hostlist_urls: ожидается объект');
+        for (let key, url in c.hostlist_urls) {
+            check(index(['user', 'exclude', 'google'], key) != -1, 'неизвестный список: ' + key);
+            check(type(url) == 'string' && match(url, /^https:\/\/[^[:space:]]+$/), 'URL списка должен быть HTTPS');
+        }
     }
     c.home = home;
     c.file = file || c.root + '/etc/zapret-manager/manager-config.json';
     c.config = c.root + '/etc/config/' + c.profile;
     c.base = c.root + '/opt/' + c.profile;
     c.state = c.root + '/etc/zapret-manager';
-    if (c.sources == null) c.sources = json(resource(home, 'sources.json'));
-    check(type(c.sources) == 'object', 'неверные настройки источников');
-    for (let key in ['manager_repo', 'flowseal_repo', 'installer_repo'])
-        check(type(c.sources[key]) == 'string' && match(c.sources[key], /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/), 'неверный источник: ' + key);
-    check(match(c.sources.branch, /^[A-Za-z0-9_.-]+$/), 'неверная ветка источника');
-    check(type(c.sources.fake_aliases) == 'object', 'неверная таблица fake-файлов');
+    c.assets = c.state + '/assets';
+    c.resources = fs.stat(c.assets + '/resources') ? c.assets + '/resources' :
+        (home != '/' ? home + '/data' : c.assets + '/resources');
+    if (c.sources == null) c.sources = { installer_repo: 'remittor/zapret-openwrt' };
+    check(type(c.sources) == 'object' && type(c.sources.installer_repo) == 'string' &&
+        match(c.sources.installer_repo, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/), 'неверный источник пакетов');
     if (c.updater == null) c.updater = { repo: '', branch: 'main', path: 'dist/just-zapret-manager.sh' };
     check(type(c.updater) == 'object' && type(c.updater.repo) == 'string' &&
         (c.updater.repo == '' || match(c.updater.repo, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)), 'неверный репозиторий обновлений');
@@ -2716,6 +1397,8 @@ function strategy_key(name) {
 };
 
 function strategy_group(name) {
+    let flow = match(name || '', /^(base|youtube|discord|games)_general(_|$)/);
+    if (flow) return flow[1];
     if (match(name || '', /^v[0-9]+$/)) return 'base';
     if (match(name || '', /^Yv[0-9]+$/)) return 'youtube';
     if (match(name || '', /^Dv[0-9]+$/)) return 'discord';
@@ -2740,9 +1423,9 @@ function strategy_order(left, right) {
     return a < b ? -1 : 1;
 };
 
-function profile_group(block) {
+function profile_group(block, include_voice) {
     if (index(block, '--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt') != -1) return 'youtube';
-    if (index(block, '--hostlist-domains=discord.media') != -1) return 'discord';
+    if (index(block, '--hostlist-domains=discord.media') != -1 || (include_voice && index(block, '--filter-l7=discord,stun') != -1)) return 'discord';
     if (index(block, '--dpi-desync-any-protocol=1') != -1) return 'games';
     if (match(block, /^--filter-tcp=(80,)?443(\n|,)/)) return 'base';
     return null;
@@ -2831,7 +1514,7 @@ function parse_catalog(ctx, text, wanted) {
 
 function catalog(ctx, file, wanted) {
     return cached(ctx, 'catalog:' + sprintf('%J', [file, wanted]), () => {
-        let text = file ? read(file, ctx.max_file_bytes) : resource(ctx.home, 'strategies.txt');
+        let text = file ? read(file, ctx.max_file_bytes) : resource(ctx.resources, 'strategies.txt');
         return parse_catalog(ctx, text, wanted);
     });
 };
@@ -2839,7 +1522,12 @@ function catalog(ctx, file, wanted) {
 function select_strategy(ctx, name, file) {
     let list = catalog(ctx, file, [strategy_key(name)]);
     let found = filter(list, (s) => s.name == name);
-    check(length(found) == 1, 'стратегия не найдена: ' + name);
+__JZM_JZM_UCODE_2__
+)
+export JZM_UCODE_2
+
+JZM_UCODE_3=$(cat <<'__JZM_JZM_UCODE_3__'
+check(length(found) == 1, 'стратегия не найдена: ' + name);
     return found[0];
 };
 
@@ -2874,7 +1562,7 @@ function replace_group(current, replacement, group) {
         let blocks = [];
         for (let block in split(validate_body(section.body), '--new\n')) {
             let voice = index(block, '--filter-l7=discord,stun') != -1;
-            if (profile_group(block) == group || (!length(replacement) && group == 'discord' && voice)) continue;
+            if (profile_group(block, match(replacement, /^#discord_general/)) == group || (!length(replacement) && group == 'discord' && voice)) continue;
             push(blocks, block);
         }
         if (length(blocks)) push(keep, (section.label != null ? '#' + section.label + '\n' : '') + join('--new\n', blocks));
@@ -2924,8 +1612,9 @@ function domains(text, limit) {
         offset += end == -1 ? length(window) : end + 1;
         let name = lc(trim(split(raw, '#')[0]));
         if (!length(name)) continue;
-        check(length(name) <= 253 && index(name, '.') != -1, 'неверный домен: ' + name);
-        for (let label in split(name, '.'))
+        let dns = substr(name, 0, 1) == '^' ? substr(name, 1) : name;
+        check(length(dns) <= 253 && index(dns, '.') != -1, 'неверный домен: ' + name);
+        for (let label in split(dns, '.'))
             check(length(label) <= 63 && match(label, label_pattern), 'неверный домен: ' + name);
         if (!exists(seen, name)) {
             seen[name] = true;
@@ -3016,7 +1705,7 @@ function compute_device_list(ctx) {
 function device_list(ctx) { return cached(ctx, 'device-list', () => compute_device_list(ctx)); };
 
 function exclusion_hook(ctx, addresses) {
-    let cfg = json(resource(ctx.home, 'network.json'));
+    let cfg = json(resource(ctx.resources, 'network.json'));
     for (let key in ['family', 'table', 'chain'])
         check(match(cfg[key], /^[A-Za-z_][A-Za-z0-9_]*$/), 'неверный параметр nft: ' + key);
     check(match(cfg.mark, /^0x[a-fA-F0-9]{1,8}$/), 'неверная метка nft');
@@ -3154,12 +1843,7 @@ function applied_status(current_hash, state, catalog_hash, empty) {
 
 function parse_packages(body, format) {
     let result = {};
-__JZM_JZM_UCODE_4__
-)
-export JZM_UCODE_4
-
-JZM_UCODE_5=$(cat <<'__JZM_JZM_UCODE_5__'
-for (let record in split(replace(body, /\r/g, '') + '\n\n', /\n\n+/)) {
+    for (let record in split(replace(body, /\r/g, '') + '\n\n', /\n\n+/)) {
         if (index(record, 'zapret') == -1) continue;
         let package = match(record, format == 'apk' ? /(^|\n)P:([^\n]+)/ : /(^|\n)Package: *([^\n]+)/);
         if (!package || (package[2] != 'zapret' && package[2] != 'luci-app-zapret')) continue;
@@ -3224,6 +1908,7 @@ function inspect_strategy(body, list) {
     let sections = strategy_sections(body), references = [], by_name = {}, overrides = {};
     let wanted = {};
     for (let section in sections) wanted[strategy_key(section.label)] = true;
+    let voice_override = false;
     let labelled = length(filter(sections, (s) => s.label == null)) == 0;
     for (let candidate in list) {
         let name = strategy_key(candidate.name);
@@ -3236,7 +1921,10 @@ function inspect_strategy(body, list) {
     // Arbitrary changes to the remaining Flowseal parameters still fail comparison.
     for (let section in sections) {
         let name = strategy_key(section.label), ref = by_name[name], group = strategy_group(name);
-        if (group && ref && ref.body == section.body && !section.boundary_missing) overrides[group] = true;
+        if (group && ref && ref.body == section.body && !section.boundary_missing) {
+            overrides[group] = true;
+            if (match(name, /^discord_general/)) voice_override = true;
+        }
     }
     let result = [];
     for (let section in sections) {
@@ -3244,7 +1932,7 @@ function inspect_strategy(body, list) {
             let name = strategy_key(section.label), ref = by_name[name];
             let exact = ref && ref.body == section.body;
             if (!exact && ref && match(name, /^general(_|$)/)) {
-                let remaining = filter(split(ref.body, '--new\n'), (block) => !overrides[profile_group(block)]);
+                let remaining = filter(split(ref.body, '--new\n'), (block) => !overrides[profile_group(block, voice_override)]);
                 exact = join('--new\n', remaining) == section.body;
             }
             push(result, { name, body: section.body, changed: !exact || section.boundary_missing });
@@ -3282,7 +1970,7 @@ function identify_strategy(body, list, state) {
 function reference_catalog(ctx, wanted) {
     let list = [];
     for (let kind in ['flowseal', 'manager']) {
-        let path = ctx.state + '/' + kind + '.json';
+        let path = ctx.assets + '/catalogs/' + kind + '.json';
         if (!fs.stat(path)) continue;
         try { list = [...list, ...parse_catalog(ctx, cached(ctx, 'source-document:' + path, () => json(read(path, ctx.max_file_bytes))).catalog, wanted)]; }
         catch (e) { /* Invalid cached presets cannot hide the actual configuration. */ }
@@ -3318,7 +2006,12 @@ function group_state(sections, group) {
         let belongs = family == group;
         if (family == null) {
             belongs = length(filter(split(section.body, '--new\n'), (block) => profile_group(block) == group ||
-                (group == 'discord' && index(block, '--filter-l7=discord,stun') != -1))) > 0;
+__JZM_JZM_UCODE_3__
+)
+export JZM_UCODE_3
+
+JZM_UCODE_4=$(cat <<'__JZM_JZM_UCODE_4__'
+(group == 'discord' && index(block, '--filter-l7=discord,stun') != -1))) > 0;
         }
         if (belongs) push(names, section.name == null ? 'кастомный блок' : section.name + (section.changed ? ' (изменена)' : ''));
     }
@@ -3377,6 +2070,246 @@ function release_plan(versions, latest) {
 
 // ---- src/lib/sources.uc ----
 
+function source_file(ctx, kind) {
+    check(kind == 'flowseal' || kind == 'manager', 'неизвестный источник');
+    return ctx.assets + '/catalogs/' + kind + '.json';
+};
+
+function source_data(ctx, kind, wanted) {
+    let file = source_file(ctx, kind);
+    check(fs.stat(file) != null, 'каталог ассетов не установлен; переустановите JZM с jzm-assets.tar.gz');
+    let value = cached(ctx, 'source-document:' + file, () => json(read(file, ctx.max_file_bytes)));
+    check(value.format == 1 && value.source == kind && type(value.revision) == 'string' &&
+          match(value.revision, /^[a-f0-9]{40}$/) && type(value.catalog) == 'string', 'повреждён каталог ассетов');
+    let strategies = cached(ctx, 'source-presets:' + kind + ':' + sprintf('%J', wanted), () => parse_catalog(ctx, value.catalog, wanted));
+    return { ...value, strategies: map(strategies, (s) => ({ ...s, missing: (value.unavailable || {})[s.name] || [] })) };
+};
+
+// ---- src/lib/assets.uc ----
+
+function fake_filename(name) {
+    check(type(name) == 'string' && length(name) <= 160 && match(name, /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.bin$/), 'неверное имя фейка');
+    return name;
+};
+
+function installed_assets(ctx) {
+    return cached(ctx, 'installed-assets', () => {
+        let data = json(read(ctx.assets + '/manifest.json', 1048576));
+        check(data.format == 1 && type(data.fakes) == 'array', 'повреждён манифест ассетов');
+        return data;
+    });
+};
+
+function asset_destination(ctx, entry) {
+    check(type(entry) == 'object' && type(entry.size) == 'int' && entry.size >= 0 && entry.size <= ctx.max_file_bytes &&
+        type(entry.sha256) == 'string' && match(entry.sha256, /^[a-f0-9]{64}$/), 'неверная запись ассета');
+    let name = entry.name, expected, destination;
+    if (entry.target == 'resource') {
+        check(index(['manager.json', 'network.json', 'google.txt', 'exclude.txt', 'user.txt', 'urls.txt', 'strategies.txt'], name) != -1,
+            'неизвестный ресурс');
+        expected = 'resources/' + name; destination = ctx.assets + '/' + expected;
+    }
+    else if (entry.target == 'catalog') {
+        check(name == 'flowseal.json' || name == 'manager.json', 'неверный каталог стратегий');
+        expected = 'catalogs/' + name; destination = ctx.assets + '/' + expected;
+    }
+    else {
+        fake_filename(name);
+        check(entry.size > 0, 'пустой fake-ассет');
+        check(entry.target == 'fake' && entry.source == 'flowseal', 'неверный тип или источник ассета');
+        expected = 'fakes/' + name;
+        destination = ctx.base + '/fakes/' + name;
+    }
+    check(entry.path == expected, 'путь ассета не совпадает с манифестом');
+    return destination;
+};
+
+function asset_output(archive, member, destination, bytes) {
+    let blocks = int((bytes + 511) / 512) + 1;
+    check(system(['/bin/sh', '-eu', '-c', 'ulimit -f "$4"; exec tar -xOzf "$1" "$2" > "$3"',
+        'jzm-assets', archive, member, destination, '' + blocks]) == 0, 'не удалось прочитать архив ассетов: ' + member);
+}
+
+function asset_snapshot(source, destination) {
+    let input = fs.open(source, 'r'), output = fs.open(destination, 'wx', 0600), total = 0;
+    check(input != null && output != null, 'не удалось подготовить архив');
+    try {
+        for (let chunk = input.read(65536); chunk != null && length(chunk); chunk = input.read(65536)) {
+            total += length(chunk);
+            check(total <= 8388608 && output.write(chunk) == length(chunk), 'архив слишком большой или повреждён');
+        }
+        input.close(); output.close();
+    }
+    catch (e) { input.close(); output.close(); die(e.message); }
+}
+
+function asset_unpack(archive, stage, sizes) {
+    let listing = stage + '/members';
+    check(system(['/bin/sh', '-eu', '-c', 'ulimit -f 2048; exec tar -tvzf "$1" > "$2"',
+        'jzm-assets', archive, listing]) == 0, 'не удалось проверить содержимое архива');
+    let names = {}, lines = split(read(listing, 1048576), '\n');
+    for (let line in lines) {
+        if (!length(line)) continue;
+        let fields = split(trim(line), /[[:space:]]+/);
+        // Both BusyBox and GNU tar list USTAR regular files as mode owner size date time path.
+        check(length(fields) == 6 && match(fields[0], /^-[rwxStTs-]{9}$/) && match(fields[2], /^[0-9]+$/),
+            'ссылки и специальные файлы в архиве запрещены');
+        let name = fields[5];
+        check(exists(sizes, name) && !exists(names, name) && +fields[2] == sizes[name], 'посторонний или повторный файл в архиве: ' + name);
+        names[name] = true;
+    }
+    check(length(names) == length(sizes), 'архив не содержит все файлы манифеста');
+    let unpacked = stage + '/unpacked';
+    check(fs.mkdir(unpacked, 0700), 'не удалось создать каталог распаковки');
+    // The private archive is immutable here; every name, type and expanded size was checked.
+    check(system(['tar', '-xzf', archive, '-C', unpacked]) == 0, 'ошибка распаковки ассетов');
+    return unpacked;
+}
+
+function install_assets(ctx, archive) {
+    let lock = getenv('ZM_TRANSACTION');
+    check(lock == ctx.root + '/tmp/zapret-manager.zapret.lock' && fs.stat(lock + '/ready'), 'нет транзакции установки ассетов');
+    let st = fs.lstat(archive);
+    check(st?.type == 'file' && st.size > 0 && st.size <= 8388608, 'неверный архив ассетов');
+    let stage = lock + '/assets-stage';
+    check(fs.mkdir(stage, 0700), 'не удалось создать staging ассетов');
+    asset_snapshot(archive, stage + '/archive.tar.gz');
+    archive = stage + '/archive.tar.gz';
+    asset_output(archive, 'manifest.json', stage + '/manifest.json', 1048576);
+    let manifest = json(read(stage + '/manifest.json', 1048576));
+    check(manifest.format == 1 && manifest.version == VERSION && type(manifest.files) == 'array' &&
+        length(manifest.files) > 0 && length(manifest.files) <= 2048 && type(manifest.fakes) == 'array', 'несовместимый архив ассетов');
+    let seen = {}, targets = {}, prepared = [], total = 0;
+    let sizes = { 'manifest.json': fs.stat(stage + '/manifest.json').size };
+    for (let entry in manifest.files) {
+        let destination = asset_destination(ctx, entry);
+        check(!exists(seen, entry.path) && !exists(targets, destination), 'повторный ассет в архиве');
+        seen[entry.path] = true; targets[destination] = entry; sizes[entry.path] = entry.size;
+        total += entry.size;
+        check(total <= 16777216, 'ассеты превышают лимит распаковки 16 MiB');
+        push(prepared, { entry, destination });
+    }
+    for (let name in ['manager.json', 'network.json', 'google.txt', 'exclude.txt', 'user.txt', 'urls.txt', 'strategies.txt'])
+        check(seen['resources/' + name], 'архив не содержит обязательный ресурс: ' + name);
+    for (let kind in ['flowseal', 'manager']) check(seen['catalogs/' + kind + '.json'], 'архив не содержит каталог: ' + kind);
+    let fake_ids = {};
+    for (let fake in manifest.fakes) {
+        check(type(fake) == 'object' && type(fake.path) == 'string', 'неверный fake в манифесте');
+        let entry = targets[ctx.root + fake.path];
+        check(entry?.target == 'fake' && entry.source == fake.source && entry.name == fake.name, 'фейк отсутствует в архиве');
+        let id = fake.source + '/' + fake.name;
+        check(!exists(fake_ids, id), 'повторный фейк в манифесте'); fake_ids[id] = true;
+    }
+    run(ctx, 'check-space', [int((total + 1023) / 1024)]);
+    let unpacked = asset_unpack(archive, stage, sizes);
+    // Validate all bytes before publishing the first managed file.
+    for (let item in prepared) {
+        item.file = unpacked + '/' + item.entry.path;
+        let body = fs.readfile(item.file, ctx.max_file_bytes + 1);
+        check(body != null && length(body) == item.entry.size && sha256(body) == item.entry.sha256,
+            'контрольная сумма ассета не совпала: ' + item.entry.path);
+        let entry = item.entry;
+        if (entry.target == 'catalog') {
+            let doc = json(body);
+            check(doc.format == 1 && doc.source + '.json' == entry.name && type(doc.revision) == 'string' &&
+                match(doc.revision, /^[a-f0-9]{40}$/) && type(doc.catalog) == 'string', 'неверный каталог ассетов');
+            parse_catalog(ctx, doc.catalog);
+        }
+        if (entry.target == 'resource') {
+            if (entry.name == 'manager.json') settings(ctx.home, item.file);
+            else if (entry.name == 'network.json') {
+                let cfg = json(body);
+                for (let key in ['family', 'table', 'chain'])
+                    check(type(cfg[key]) == 'string' && match(cfg[key], /^[A-Za-z_][A-Za-z0-9_]*$/), 'неверная конфигурация nft в ассетах');
+                check(type(cfg.mark) == 'string' && match(cfg.mark, /^0x[a-fA-F0-9]{1,8}$/), 'неверная метка nft в ассетах');
+            }
+            else if (entry.name == 'strategies.txt') parse_catalog(ctx, body);
+            else if (entry.name == 'urls.txt') { check(index(body, '\x00') == -1, 'NUL в URL ассетах'); urls(body, ctx.max_urls); }
+            else validate_list_snapshot(body, ctx.max_domains, ctx.max_file_bytes);
+        }
+    }
+    for (let item in prepared) {
+        run(ctx, 'asset-file', [item.file, item.destination]);
+    }
+    send(ctx, 'state-assets-manifest', [], sprintf('%J\n', manifest));
+    printf('Ассеты %s установлены: %d файлов.\n', manifest.version, length(prepared));
+};
+
+// ---- src/lib/fakes.uc ----
+
+function fake_catalog(ctx, kind) {
+    check(kind == 'flowseal', 'неизвестный источник');
+    return sort(map(filter(installed_assets(ctx).fakes, (entry) => entry.source == kind &&
+        fs.stat(ctx.root + entry.path)?.type == 'file'), (entry) => entry.name));
+};
+
+// Canonicalizing first also handles UCI configurations written on one line.
+function fake_slots(body) {
+    if (!length(trim(body || ''))) return [];
+    let slots = [], section = 'своя стратегия', profile = 1, global_profile = 1;
+    let lines = split(preserve_body(body), '\n');
+    for (let i = 0; i < length(lines); i++) {
+        let line = lines[i];
+        if (substr(line, 0, 1) == '#') { section = substr(line, 1); profile = 1; }
+        if (line == '--new') { profile++; global_profile++; }
+        let m = match(line, /^(--dpi-desync-[A-Za-z0-9_-]+)=(\/opt\/zapret\/(fakes|files\/fake)\/([A-Za-z0-9_][A-Za-z0-9_.-]*\.bin))$/);
+        if (m && match(m[1], /^--dpi-desync-(fake-[A-Za-z0-9_-]+|[A-Za-z0-9_-]+-pattern)$/)) push(slots, { line: i, option: m[1], path: m[2], name: m[4], section, profile, global_profile });
+    }
+    return slots;
+};
+
+function current_fakes(ctx) {
+    let entries = [];
+    try { entries = installed_assets(ctx).fakes; } catch (e) { /* Unmanaged files remain visible. */ }
+    let by_path = {};
+    for (let entry in entries) by_path[entry.path] = entry;
+    return map(fake_slots(configured_strategy(ctx)), (slot) => {
+        let entry = by_path[slot.path], st = fs.stat(ctx.root + slot.path);
+        return { ...slot, present: st?.type == 'file' && st.size > 0,
+            source: entry?.source || 'не указан', filename: entry?.name || slot.name };
+    });
+};
+
+// Group by full path: equal basenames in different directories are distinct files.
+function group_fakes(slots) {
+    let groups = [], by_path = {};
+    for (let slot in slots) {
+        if (by_path[slot.path] == null) {
+            by_path[slot.path] = length(groups);
+            push(groups, { path: slot.path, filename: slot.filename || slot.name,
+                present: slot.present, source: slot.source, sections: [], slots: [] });
+        }
+        let group = groups[by_path[slot.path]];
+        push(group.slots, slot);
+        if (index(group.sections, slot.section) == -1) push(group.sections, slot.section);
+    }
+    return groups;
+};
+
+function replace_fake(body, line, expected, path) {
+    check(type(line) == 'string' && match(line, /^[0-9]+$/), 'неверный номер фейка');
+    let slot = filter(fake_slots(body), (s) => s.line == +line && s.path == expected)[0];
+    check(slot != null, 'фейк уже изменён; откройте меню заново');
+    check(match(path, /^\/opt\/zapret\/(fakes|files\/fake)\/[A-Za-z0-9_][A-Za-z0-9_.-]*\.bin$/), 'неверный путь фейка');
+    let lines = split(preserve_body(body), '\n');
+    lines[slot.line] = slot.option + '=' + path;
+    return preserve_body(join('\n', lines));
+};
+
+function prepare_fake_replacement(ctx, line, expected, kind, name) {
+    check(kind == 'flowseal', 'неизвестный источник');
+    let body = configured_strategy(ctx);
+    replace_fake(body, line, expected, expected);
+    fake_filename(name);
+    let selected = filter(installed_assets(ctx).fakes, (entry) => entry.source == kind && entry.name == name);
+    check(length(selected) == 1, 'фейк отсутствует в установленных ассетах');
+    let target = selected[0].path, st = fs.stat(ctx.root + target);
+    check(st?.type == 'file' && st.size > 0, 'файл ассета отсутствует; переустановите архив ассетов');
+    return replace_fake(body, line, expected, target);
+};
+
+// ---- src/lib/releases.uc ----
+
 function github_response(response) {
     let first = index(response, '\n'), tail = substr(response, first + 1), next = index(tail, '\n');
     check(first == 3 && next != -1, 'неверный ответ HTTP от GitHub API');
@@ -3396,199 +2329,6 @@ function remote(ctx, url) {
         return github_response(output(ctx, 'github-download', [ctx.connect_timeout,
             ctx.request_timeout, ctx.max_file_bytes - 64, url]));
     return output(ctx, 'download', [ctx.connect_timeout, ctx.request_timeout, ctx.max_file_bytes, url]);
-}
-
-function revision(ctx, repo) {
-    let reply = json(remote(ctx, 'https://api.github.com/repos/' + repo + '/commits/' + ctx.sources.branch));
-    check(type(reply.sha) == 'string' && match(reply.sha, /^[a-f0-9]{40}$/), 'источник не вернул commit SHA');
-    return reply.sha;
-}
-
-function raw_url(repo, rev, path) {
-    check(match(rev, /^[a-f0-9]{40}$/) && match(path, /^[A-Za-z0-9_ .()\/-]+$/) &&
-          !match(path, /(^|\/)\.\.?(\/|$)/), 'неверный путь источника');
-    return 'https://raw.githubusercontent.com/' + repo + '/' + rev + '/' + replace(path, / /g, '%20');
-}
-
-function manager_catalog(ctx, source, youtube) {
-    // Accept upstream's safe "--option value" spelling, store canonical --option=value.
-    let canonical_options = (body) => join('\n', map(split(body, '\n'), (line) => {
-        let option = match(trim(line), /^(--[A-Za-z0-9][A-Za-z0-9_-]*)[ \t]+([A-Za-z0-9_.,:\/+=@%{}!~-]+)$/);
-        return option ? option[1] + '=' + option[2] : line;
-    }));
-    let imported_body = (body) => validate_body(canonical_options(body));
-    let result = [];
-    for (let line in split(source, '\n')) {
-        let m = match(line, /^strategy_(v[0-9]+)\(\) \{ printf /);
-        if (m) {
-            let quoted = split(line, '"'), args = [];
-            for (let i = 1; i < length(quoted); i += 2)
-                if (substr(quoted[i], 0, 2) == '--') push(args, quoted[i]);
-            push(result, { name: m[1], body: imported_body(join('\n', args)) });
-        }
-        m = match(line, /^(Dv[0-9]+)=\$'([^']*)'/);
-        if (m) push(result, { name: m[1], body: imported_body(replace(m[2], /\\n/g, '\n')) });
-    }
-    check(length(result), 'в исходном менеджере не найдены стратегии v/Dv');
-    for (let s in parse_catalog(ctx, canonical_options(youtube))) push(result, s);
-    for (let s in catalog(ctx)) if (match(s.name, /^Gv/)) push(result, s);
-    return join('', map(result, (s) => '#' + s.name + '\n' + s.body));
-};
-
-function windows_tokens(text) {
-    let args = [], word = '', quoted = false;
-    for (let i = 0; i < length(text); i++) {
-        let c = substr(text, i, 1);
-        if (c == '"') { quoted = !quoted; continue; }
-        if (c == '^') {
-            let next = substr(text, i + 1, 1);
-            if (next == '!') { word += '^!'; i++; continue; }
-            check(next == '\n' || next == '\r' || next == ' ', 'неподдерживаемое экранирование BAT');
-            continue;
-        }
-        if (!quoted && match(c, /^[[:space:]]$/)) {
-            if (length(word)) { push(args, word); word = ''; }
-        }
-        else word += c;
-    }
-    check(!quoted, 'незакрытая кавычка BAT');
-    if (length(word)) push(args, word);
-    return args;
-}
-
-function flowseal_strategy(ctx, text) {
-    let command = '', active = false;
-    for (let raw in split(replace(text, /\r/g, ''), '\n')) {
-        let line = trim(raw);
-        if (!active && match(line, /^start[[:space:]].*winws\.exe/i)) {
-            active = true;
-            line = substr(line, index(lc(line), 'winws.exe') + 9);
-            line = substr(line, index(line, '--'));
-        }
-        if (!active) continue;
-        command += line + '\n';
-        if (!match(line, /\^$/)) break;
-    }
-    check(active, 'команда winws в BAT не найдена');
-    let blocks = [[]];
-    for (let arg in windows_tokens(command)) {
-        if (arg == '--new') { push(blocks, []); continue; }
-        if (match(arg, /^--wf-/)) continue;
-        check(substr(arg, 0, 2) == '--', 'неожиданный токен BAT: ' + arg);
-        push(blocks[-1], arg);
-    }
-    let result = [], assets = {};
-    for (let block in blocks) {
-        let joined = join(' ', block);
-        let supported = match(joined, /^--filter-udp=19294-19344,50000-50100/) ||
-            match(joined, /^--filter-tcp=%GameFilterTCP%/) || match(joined, /^--filter-udp=%GameFilterUDP%/) ||
-            match(joined, /^--filter-tcp=2053,2083,2087,2096,8443/) ||
-            match(joined, /^--filter-tcp=443 --hostlist=%LISTS%list-google.txt/) ||
-            match(joined, /^--filter-tcp=80,443 --hostlist=%LISTS%list-general.txt/);
-        if (!supported) continue;
-        let converted = [];
-        for (let arg in block) {
-            if (match(arg, /^--ipset(-exclude)?=/) ||
-                match(arg, /^--hostlist=%LISTS%list-general(-user)?\.txt$/) ||
-                arg == '--hostlist-exclude=%LISTS%list-exclude-user.txt') continue;
-            arg = replace(arg, '%GameFilterTCP%', ctx.sources.tcp_ports);
-            arg = replace(arg, '%GameFilterUDP%', ctx.sources.udp_ports);
-            arg = replace(arg, '%LISTS%list-google.txt', '/opt/zapret/ipset/zapret-hosts-google.txt');
-            arg = replace(arg, '%LISTS%list-exclude.txt', '/opt/zapret/ipset/zapret-hosts-user-exclude.txt');
-            arg = replace(arg, '^!', '%BIN%tls_clienthello_www_google_com.bin');
-            let m = match(arg, /%BIN%([A-Za-z0-9_.-]+\.bin)/);
-            if (m) {
-                let original = m[1], local = ctx.sources.fake_aliases[original] || original;
-                check(match(local, /^[A-Za-z0-9_.-]+\.bin$/), 'неверное имя fake-файла');
-                let remote = match(original, /^ACTIVE_/) ? local : original;
-                assets[local] = 'bin/' + remote;
-                arg = replace(arg, '%BIN%' + original, '/opt/zapret/files/fake/' + local);
-            }
-            check(!match(arg, /%[A-Za-z_][A-Za-z0-9_]*%/), 'неизвестная переменная BAT: ' + arg);
-            push(converted, arg);
-        }
-        if (length(converted)) push(result, join('\n', converted));
-    }
-    check(length(result) && length(filter(result, (block) =>
-        index(block, '--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt') != -1 ||
-        match(block, /^--filter-tcp=80,443(\n|,)/))),
-        'нет полной переносимой TCP/YouTube-стратегии; частичные блоки не импортированы');
-    return { body: validate_body(join('\n--new\n', result)), assets };
-};
-
-function source_file(ctx, kind) {
-    check(kind == 'manager' || kind == 'flowseal', 'неизвестный источник');
-    return ctx.state + '/' + kind + '.json';
-};
-
-function source_data(ctx, kind, wanted) {
-    let file = source_file(ctx, kind);
-    if (!fs.stat(file)) {
-        check(kind == 'manager', 'сначала обновите каталог Flowseal в меню');
-        let text = resource(ctx.home, 'strategies.txt');
-        return { catalog: text, strategies: cached(ctx, 'builtin-presets:' + sprintf('%J', wanted), () => parse_catalog(ctx, text, wanted)), assets: {}, revision: 'встроенный' };
-    }
-    let value = cached(ctx, 'source-document:' + file, () => json(read(file, ctx.max_file_bytes)));
-    check(value.format == 1 && value.source == kind && type(value.revision) == 'string' &&
-          length(value.revision) == 40 && match(value.revision, /^[a-f0-9]+$/) &&
-          type(value.assets) == 'object', 'повреждён каталог источника');
-    check(type(value.catalog) == 'string', 'повреждён текст каталога источника');
-    let strategies = cached(ctx, 'source-presets:' + kind + ':' + sprintf('%J', wanted),
-        () => parse_catalog(ctx, value.catalog, wanted));
-    return { ...value, strategies };
-};
-
-function refresh_source(ctx, kind) {
-    source_file(ctx, kind);
-    let repo = ctx.sources[kind + '_repo'], rev = revision(ctx, repo), assets = {}, text = '', skipped = [];
-    if (kind == 'manager') {
-        text = manager_catalog(ctx, remote(ctx, raw_url(repo, rev, 'Zapret-Manager.sh')),
-            remote(ctx, raw_url(repo, rev, 'files/StrYoutube')));
-    }
-    else {
-        let tree = json(remote(ctx, 'https://api.github.com/repos/' + repo + '/git/trees/' + rev + '?recursive=1'));
-        check(type(tree.tree) == 'array' && !tree.truncated, 'неполное дерево репозитория Flowseal');
-        for (let file in tree.tree) {
-            if (file.type != 'blob' || !match(file.path, /^general[A-Za-z0-9_ .()-]*\.bat$/i)) continue;
-            try {
-                let converted = flowseal_strategy(ctx, remote(ctx, raw_url(repo, rev, file.path)));
-                let name = strategy_key(replace(replace(file.path, /\.bat$/i, ''), /[^A-Za-z0-9_.-]+/g, '_'));
-                text += '#' + name + '\n' + converted.body;
-                for (let local, path in converted.assets) assets[local] = path;
-            }
-            catch (e) { push(skipped, file.path + ': ' + e.message); }
-        }
-    }
-    let list = parse_catalog(ctx, text);
-    let value = { format: 1, source: kind, revision: rev, catalog: text, assets, skipped };
-    let body = sprintf('%J\n', value);
-    check(length(body) <= ctx.max_file_bytes, 'каталог источника слишком большой');
-    send(ctx, 'source-write', [kind], body);
-    printf('Обновлено стратегий: %d\nРевизия: %s\n', length(list), rev);
-    for (let line in skipped) printf('Пропущено: %s\n', line);
-};
-
-function prepare_assets(ctx, kind, body, prepared) {
-    let data = prepared || source_data(ctx, kind, []), repo = ctx.sources[kind + '_repo'], pinned = null;
-    for (let line in split(body, '\n')) {
-        let m = match(line, /^--[^=]+=\/opt\/zapret\/files\/fake\/([A-Za-z0-9_.-]+\.bin)$/);
-        if (!m || fs.stat(ctx.base + '/files/fake/' + m[1])) continue;
-        let local = m[1], path = data.assets[local];
-        // Manager strategies use the same supplemental fake files as the original manager.
-        if (kind == 'manager') {
-            repo = ctx.sources.flowseal_repo;
-            let aliases = { '4pda.bin': 'tls_clienthello_4pda_to.bin',
-                'tls_clienthello_www_onetrust_com.bin': 'tls_clienthello_max_ru.bin' };
-            path = 'bin/' + (aliases[local] || local);
-        }
-        check(path != null, 'источник не содержит fake-файл: ' + local);
-        if (kind == 'manager' && pinned == null) pinned = revision(ctx, repo);
-        let rev = kind == 'manager' ? pinned : data.revision;
-        run(ctx, 'check-space', [int((ctx.max_file_bytes + 1023) / 1024)]);
-        let payload = output(ctx, 'download', [ctx.connect_timeout, ctx.request_timeout,
-            ctx.max_file_bytes, raw_url(repo, rev, path)]);
-        send(ctx, 'resource-bytes', [local], payload);
-    }
 };
 
 function release_install(ctx) {
@@ -3605,12 +2345,7 @@ function release_install(ctx) {
     let name = 'zapret_' + release.tag_name + '_' + arch + '.zip';
     let selected = filter(release.assets, (a) => a.name == name);
     check(length(selected) == 1, 'нет сборки Zapret для архитектуры ' + arch);
-__JZM_JZM_UCODE_5__
-)
-export JZM_UCODE_5
-
-JZM_UCODE_6=$(cat <<'__JZM_JZM_UCODE_6__'
-let url = 'https://github.com/' + ctx.sources.installer_repo + '/releases/download/' + release.tag_name + '/' + name;
+    let url = 'https://github.com/' + ctx.sources.installer_repo + '/releases/download/' + release.tag_name + '/' + name;
     check(selected[0].browser_download_url == url && type(selected[0].size) == 'int' &&
         selected[0].size > 0 && selected[0].size <= 16777216, 'неверный файл релиза');
     let digest = selected[0].digest || '';
@@ -3648,12 +2383,14 @@ function render_bundle(ctx) {
     return body + 'JZM_PARTS=' + count + '\nexport JZM_PARTS\n' + embedded_footer();
 };
 
-function install_manager(ctx) {
-    if (!getenv('ZM_TRANSACTION')) { check(invoke(ctx, ['manager-install']) == 0, 'не удалось установить менеджер'); return; }
+function install_manager(ctx, archive) {
+    if (!getenv('ZM_TRANSACTION')) { check(invoke(ctx, ['manager-install', ...(archive ? [archive] : [])]) == 0, 'не удалось установить менеджер'); return; }
     let destination = getenv('DESTDIR') || ctx.root;
     check(destination == '' || (match(destination, /^\/[A-Za-z0-9_./ -]+$/) && !match(destination, /(^|\/)\.\.?(\/|$)/)), 'неверный DESTDIR');
+    if (archive != null) install_assets(ctx, archive);
     send(ctx, 'manager-install', [destination], render_bundle(ctx));
-    let config = embedded_config() || json(read(ctx.home + '/data/manager.json', 65536));
+    let path = ctx.assets + '/resources/manager.json';
+    let config = fs.stat(path) ? json(read(path, 65536)) : default_settings();
     send(ctx, 'manager-config-init', [destination], sprintf('%J\n', config));
     // Early builds saved an empty update source; migrate only that known default.
     let saved = destination + '/etc/zapret-manager/manager-config.json';
@@ -3691,7 +2428,12 @@ function compute_update_status(ctx) {
 };
 
 function update_status(ctx) {
-    return cached(ctx, 'update-status', () => compute_update_status(ctx));
+__JZM_JZM_UCODE_4__
+)
+export JZM_UCODE_4
+
+JZM_UCODE_5=$(cat <<'__JZM_JZM_UCODE_5__'
+return cached(ctx, 'update-status', () => compute_update_status(ctx));
 };
 
 function check_update(ctx) {
@@ -3816,42 +2558,41 @@ function choose_strategy(ctx, kind, group) {
             try {
                 let data = source_data(ctx, kind);
                 list = data.strategies; revision = data.revision;
-                if (group != null) list = filter(list, (s) => strategy_group(s.name) == group);
+                list = filter(list, (s) => group != null ? strategy_group(s.name) == group : strategy_group(s.name) == null);
                 sort(list, strategy_order);
                 problem = length(list) ? '' : 'В каталоге нет стратегий этой группы.';
             }
             catch (e) { list = []; problem = e.message; }
         }
         let state = strategy_state(ctx);
-        screen(kind == 'flowseal' ? 'Пресеты Flowseal' : 'Выбор · ' +
+        screen(group == null ? 'Пресеты Flowseal' : 'Выбор · ' +
             { base: 'Базовый трафик', youtube: 'YouTube', discord: 'Discord', games: 'Игры' }[group]);
-        if (kind == 'flowseal') current_strategy(state);
+        if (group == null) current_strategy(state);
         else printf('Сейчас: %s\n\n', paint('35;1', group_state(state.sections, group)));
         let first = page * 12;
         if (length(problem)) printf('%s\n\n', paint('33', problem));
         else {
             for (let i = first; i < length(list) && i < first + 12; i++) {
                 let active = length(filter(state.sections, (s) => s.name == strategy_key(list[i].name) && !s.changed)) > 0;
-                menu_line(i + 1, paint(active ? '32;1' : '0', strategy_title(list[i].name)) + (active ? '  ← выбрана' : ''));
+                menu_line(i + 1, paint(active ? '32;1' : '0', strategy_title(list[i].name)) + (length(list[i].missing || []) ? ' · нет фейка: ' + join(', ', list[i].missing) : '') + (active ? '  ← выбрана' : ''));
             }
             printf('\n%s\n', paint('2', 'Каталог: ' + (revision == 'встроенный' ? revision : substr(revision, 0, 8))));
         }
         if (length(list) > 12) printf('  n. Далее   p. Назад по списку   (%d/%d)\n', page + 1, int((length(list) + 11) / 12));
-        menu_line('u', 'Обновить каталог');
-        menu_line('d', kind == 'flowseal' ? 'Отключить Flowseal, оставить другие стратегии' : 'Отключить эту группу');
+        menu_line('d', group == null ? 'Отключить Flowseal, оставить другие стратегии' : 'Отключить эту группу');
         menu_line('0', 'Отмена'); print('\n');
         let value = prompt('Выбор', null);
         if (value == null || value == '' || value == '0') return null;
         value = lc(value);
         if (value == 'd') return { disable: true };
-        if (value == 'u') {
-            perform(() => command(ctx, ['source', 'refresh', kind]));
-            list = null; page = 0; continue;
-        }
         if (value == 'n') { if (first + 12 < length(list)) page++; continue; }
         if (value == 'p') { if (page) page--; continue; }
         if (!match(value, /^[0-9]+$/) || +value <= first || +value > length(list) || +value > first + 12) {
             print('Нет такого пункта на этой странице.\n'); pause(); continue;
+        }
+        if (length(list[+value - 1].missing || [])) {
+            print('Нет фейков Flowseal: ' + join(', ', list[+value - 1].missing) + '.\n');
+            pause(); continue;
         }
         return list[+value - 1];
     }
@@ -3871,11 +2612,15 @@ function edit_group(ctx, group) {
 }
 
 function compose_menu(ctx) {
-    let groups = ['base', 'youtube', 'discord', 'games'];
-    let labels = ['Базовый трафик:', 'YouTube:       ', 'Discord:       ', 'Игры:          '];
+    let groups = ['base', 'youtube', 'discord'];
+    let labels = ['Базовый трафик:', 'YouTube:       ', 'Discord:       '];
     while (!ended) {
         let state = strategy_state(ctx), available = [];
-        try { available = source_data(ctx, 'manager').strategies; } catch (e) { /* Picker offers catalog repair. */ }
+        if (length(filter(state.sections, (section) => match(section.name || '', /^general(_|$)/)))) {
+            print('Сначала очистите текущую стратегию Flowseal: пункт «Очистить стратегию».\n');
+            pause(); return;
+        }
+        try { available = source_data(ctx, 'manager').strategies; } catch (e) { /* A missing archive is reported by the picker. */ }
         screen('Собрать стратегию'); current_strategy(state);
         for (let i = 0; i < length(groups); i++) {
             let names = cached(ctx, 'menu-group:' + groups[i], () => {
@@ -3892,7 +2637,7 @@ function compose_menu(ctx) {
         menu_line('0', 'Назад'); print('\n');
         let value = prompt('Выбор', null);
         if (value == null || value == '' || value == '0') return;
-        if (!match(value, /^[1-4]$/)) { print('Нет такого пункта.\n'); pause(); continue; }
+        if (!match(value, /^[1-3]$/)) { print('Нет такого пункта.\n'); pause(); continue; }
         edit_group(ctx, groups[+value - 1]);
     }
 }
@@ -3925,18 +2670,95 @@ function test_menu(ctx) {
     }
 }
 
+function fake_purpose(slot) {
+    let names = {
+        'fake-tls': 'TLS', 'fake-http': 'HTTP', 'fake-quic': 'QUIC',
+        'fake-discord': 'Discord', 'fake-stun': 'STUN', 'fake-unknown-udp': 'UDP',
+        'fake-unknown': 'Другой трафик', 'fake-syn': 'SYN',
+        'split-seqovl-pattern': 'Шаблон перекрытия'
+    };
+    let key = replace(slot.option, /^--dpi-desync-/, '');
+    return names[key] || key;
+}
+
+function choose_fake(ctx, slot) {
+    let list = fake_catalog(ctx, 'flowseal'), page = 0;
+    while (!ended) {
+        screen('Фейки · замена');
+        print(slot.filename + ' → ' + fake_purpose(slot) + '\n');
+        print('Каталог Flowseal · выбирайте файл подходящего формата.\n\n');
+        let first = page * 12;
+        for (let i = first; i < length(list) && i < first + 12; i++)
+            menu_line(i + 1, list[i] + (list[i] == slot.filename ? ' (текущий)' : ''));
+        if (length(list) > 12) printf('  n. Далее   p. Назад · %d/%d\n', page + 1, int((length(list) + 11) / 12));
+        menu_line('0', 'Отмена');
+        let value = prompt('Файл', null);
+        if (value == null || value == '' || value == '0') return null;
+        if (value == 'n') { if (first + 12 < length(list)) page++; continue; }
+        if (value == 'p') { if (page) page--; continue; }
+        if (match(value, /^[0-9]+$/) && +value > first && +value <= length(list) && +value <= first + 12)
+            return list[+value - 1];
+        print('Нет такого пункта на этой странице.\n'); pause();
+    }
+    return null;
+}
+
+function fake_menu(ctx) {
+    while (!ended) {
+        let groups = group_fakes(current_fakes(ctx));
+        if (!length(groups)) {
+            screen('Фейки');
+            print('В текущей стратегии нет .bin файлов для замены.\n');
+            pause(); return;
+        }
+        let labels = map(groups, (g) => join(', ', g.sections) + ' — ' + g.filename);
+        let selected = choice('Фейки', labels);
+        if (!selected) return;
+        let group = groups[selected - 1], slot = group.slots[0];
+        if (length(group.slots) > 1) {
+            let use = choice(group.filename + ' · где заменить', map(group.slots,
+                (s) => fake_purpose(s) + ' · ' + s.section + ' · профиль ' + s.profile));
+            if (!use) continue;
+            slot = group.slots[use - 1];
+        }
+        let name = choose_fake(ctx, slot);
+        if (!name) continue;
+        printf('\n%s · профиль %d · %s\n', slot.section, slot.profile, slot.option);
+        if (!confirm(slot.filename + ' → ' + name)) continue;
+        perform(() => {
+            command(ctx, ['fake', 'replace', '' + slot.line, slot.path, 'flowseal', name]);
+            print('Фейк заменён.\n');
+        });
+    }
+}
+
 function strategy_menu(ctx) {
     while (!ended) {
-        screen('Zapret: Стратегии'); current_strategy(strategy_state(ctx));
+        let state = strategy_state(ctx);
+        screen('Zapret: Стратегии'); current_strategy(state);
         menu_line('1', 'Стратегии Flowseal');
-        menu_line('2', 'Собрать: основная + YouTube + Discord + игры');
+        menu_line('2', 'Собрать: основная + YouTube + Discord');
         menu_line('3', 'Тестирование и автоподбор');
+        menu_line('4', 'Игры · ' + group_state(state.sections, 'games'));
+        menu_line('5', 'Фейки: текущие файлы и замена');
+        menu_line('6', 'Очистить стратегию');
         print('\n'); menu_line('f', 'Загрузить свою стратегию из файла');
         menu_line('0', 'Назад'); print('\n');
         let value = prompt('Выбор', null);
         if (value == null || value == '' || value == '0') return;
         if (value == '2') { compose_menu(ctx); continue; }
         if (value == '3') { test_menu(ctx); continue; }
+        if (value == '4') { edit_group(ctx, 'games'); continue; }
+        if (value == '5') { fake_menu(ctx); continue; }
+        if (value == '6') {
+            if (confirm('Очистить все текущие стратегии и остановить Zapret')) {
+                perform(() => {
+                    command(ctx, ['strategy', 'clear']);
+                    print(length(strategy_state(ctx).sections) ? 'Очистка отменена.\n' : 'Стратегия очищена.\n');
+                });
+            }
+            continue;
+        }
         if (lc(value) == 'f') {
             perform(() => {
                 let file = local_file('Файл стратегии', '/root/custom.txt');
@@ -4011,7 +2833,7 @@ function hosts_menu(ctx) {
         if (!c) return;
         let kind = kinds[c - 1];
         while (!ended) {
-            let action = choice('Список: ' + kind, ['Показать', 'Добавить домены', 'Удалить домены', 'Заменить из файла', 'Обновить из источника']);
+            let action = choice('Список: ' + kind, ['Показать', 'Добавить домены', 'Удалить домены', 'Заменить из файла', 'Восстановить из установленных ассетов']);
             if (!action) break;
             perform(() => {
                 if (action == 1) command(ctx, ['hosts', kind, 'show']);
@@ -4036,15 +2858,15 @@ function config_menu(ctx) {
             if (c == 1) { command(ctx, ['config', 'show']); return; }
             if (c == 9 || c == 10) {
                 command(ctx, ['network', 'status']);
-__JZM_JZM_UCODE_6__
-)
-export JZM_UCODE_6
-
-JZM_UCODE_7=$(cat <<'__JZM_JZM_UCODE_7__'
-let action = choice(c == 9 ? 'Flow Offloading' : 'QUIC', c == 9 ?
+                let action = choice(c == 9 ? 'Flow Offloading' : 'QUIC', c == 9 ?
                     ['Отключить ускорение для совместимости с Zapret', 'Вернуть прежние настройки ускорения'] :
                     ['Блокировать QUIC, использовать TCP', 'Снять блокировку QUIC, созданную JZM']);
-                if (action) command(ctx, ['network', c == 9 ? 'offload' : 'quic',
+__JZM_JZM_UCODE_5__
+)
+export JZM_UCODE_5
+
+JZM_UCODE_6=$(cat <<'__JZM_JZM_UCODE_6__'
+if (action) command(ctx, ['network', c == 9 ? 'offload' : 'quic',
                     c == 9 ? (action == 1 ? 'disable' : 'restore') : (action == 1 ? 'on' : 'off')]);
                 return;
             }
@@ -4194,10 +3016,11 @@ function persist_applied(ctx, body) {
     send(ctx, 'state-write', ['state.json'], sprintf('%J\n', state));
 }
 
-function approve_strategy_change(ctx) {
+function approve_strategy_change(ctx, clearing) {
     let state = read_applied(ctx);
     if (state == null || strategy_hash(configured_strategy(ctx)) == state.applied_hash) return true;
-    print('Внимание: ваши ручные изменения будут заменены версией из каталога. Продолжить? [y/N] ');
+    print(clearing ? 'Внимание: ваши ручные изменения будут удалены. Продолжить? [y/N] ' :
+        'Внимание: ваши ручные изменения будут заменены версией из каталога. Продолжить? [y/N] ');
     fs.stdout.flush();
     let answer = '';
     while (true) {
@@ -4253,8 +3076,7 @@ function initialize_lists(ctx) {
         let name = kind == 'user' ? 'zapret-hosts-user.txt' :
             (kind == 'exclude' ? 'zapret-hosts-user-exclude.txt' : 'zapret-hosts-google.txt');
         if (fs.stat(ctx.base + '/ipset/' + name)) continue;
-        let body = kind == 'google' ? resource(ctx.home, 'google.txt') :
-            (kind == 'exclude' ? resource(ctx.home, 'exclude.txt') : '');
+        let body = resource(ctx.resources, kind + '.txt');
         send(ctx, 'hosts-write', [kind], body);
     }
 }
@@ -4269,7 +3091,7 @@ function probe(ctx, targets) {
     return ok;
 }
 
-function benchmark(ctx, args, keep, source_kind, prepared) {
+function benchmark(ctx, args, keep, prepared) {
     arity(args, 1, 2);
     let targets = urls(target_text(ctx, args[0]), ctx.max_urls);
     let list = [], results = [];
@@ -4295,7 +3117,6 @@ function benchmark(ctx, args, keep, source_kind, prepared) {
     if (applied) {
         let body = label_strategy(best.name, filter(list, (s) => s.name == best.name)[0].body);
         initialize_lists(ctx);
-        if (source_kind != null) prepare_assets(ctx, source_kind, body, prepared);
         apply(ctx, body);
     }
     printf('%J\n', { control, total: length(targets), results, best, applied });
@@ -4317,10 +3138,11 @@ function host_command(ctx, args) {
     }
     else if (action == 'refresh') {
         arity(extra, 0, 0);
-        check(exists(ctx.hostlist_urls, kind), 'URL для списка не задан в manager.json');
-        items = domains(output(ctx, 'download', [ctx.connect_timeout, ctx.request_timeout,
-                        ctx.max_file_bytes, ctx.hostlist_urls[kind]]), ctx.max_domains);
-        check(length(items) > 0, 'сервер вернул пустой список');
+        let text = resource(ctx.resources, kind + '.txt');
+        validate_list_snapshot(text, ctx.max_domains, ctx.max_file_bytes);
+        send(ctx, 'hosts-write', [kind], text);
+        run(ctx, 'service', ['restart']);
+        return;
     }
     else {
         check(action == 'add' || action == 'remove', 'неизвестная операция со списком');
@@ -4407,15 +3229,15 @@ function backup(ctx, args) {
 }
 
 function dispatch(ctx, command, args) {
-    let changes_strategy = (command == 'strategy' && index(['apply', 'import'], args[0]) != -1) ||
+    let changes_strategy = (command == 'strategy' && index(['apply', 'import', 'clear'], args[0]) != -1) ||
         (command == 'source' && index(['apply', 'compose', 'group', 'remove', 'benchmark', 'auto-best'], args[0]) != -1) ||
         command == 'benchmark' || command == 'auto-best';
     // Run after acquiring the transaction lock, before downloads or configuration writes.
-    if (changes_strategy && !approve_strategy_change(ctx)) { print('\nДействие отменено.\n'); return; }
+    if (changes_strategy && !approve_strategy_change(ctx, command == 'strategy' && args[0] == 'clear')) { print('\nДействие отменено.\n'); return; }
     switch (command) {
     case 'backend-operation': {
         let action = args[0], values = slice(args, 3);
-        if (index(['state-write', 'source-write', 'hosts-write', 'config-restore', 'device-hook-write',
+        if (index(['state-write', 'hosts-write', 'config-restore', 'device-hook-write',
                    'manager-config-init', 'backup-write'], action) != -1) {
             check(length(values), 'не указан файл операции');
             send(ctx, action, slice(values, 1), read(values[0], ctx.max_file_bytes));
@@ -4424,7 +3246,7 @@ function dispatch(ctx, command, args) {
             print(output(ctx, action == 'config-read' ? 'config-get' : 'config-get-optional', values));
         else if (action == 'hosts-read-stdout') print(output(ctx, 'hosts-read', values));
         else {
-            check(index(['config-set', 'service', 'network', 'resource-write', 'manager-install',
+            check(index(['config-set', 'service', 'network', 'asset-file', 'manager-install',
                 'manager-uninstall', 'strategy-state-clear', 'schedule', 'uninstall-cleanup', 'status', 'doctor', 'settle'], action) != -1,
                 'неизвестная нативная операция: ' + action);
             run(ctx, action, values);
@@ -4441,9 +3263,13 @@ function dispatch(ctx, command, args) {
         check(args[0] == 'all', 'неверный режим удаления');
         run(ctx, 'uninstall-cleanup', args);
         break;
+    case 'assets-install':
+        arity(args, 1, 1);
+        install_assets(ctx, args[0]);
+        break;
     case 'manager-install':
-        arity(args, 0, 0);
-        install_manager(ctx);
+        arity(args, 0, 1);
+        install_manager(ctx, args[0]);
         break;
     case 'manager-uninstall':
         arity(args, 0, 0);
@@ -4499,22 +3325,34 @@ function dispatch(ctx, command, args) {
         if (args[0] == 'enable') run(ctx, 'service', ['enable']);
         run(ctx, 'service', ['restart']);
         break;
+    case 'fake':
+        arity(args, 1, 5);
+        if (args[0] == 'list') {
+            arity(args, 1, 1);
+            printf('%J\n', current_fakes(ctx));
+        }
+        else {
+            check(args[0] == 'replace', 'неверная команда фейков');
+            arity(args, 5, 5);
+            let body = prepare_fake_replacement(ctx, args[1], args[2], args[3], args[4]);
+            if (trim(body) != trim(configured_strategy(ctx))) apply(ctx, body);
+        }
+        break;
     case 'source': {
         arity(args, 2, 10);
         let action = args[0], kind = args[1];
-        check(kind == 'manager' || kind == 'flowseal', 'неизвестный источник');
+        check(kind == 'flowseal' || kind == 'manager', 'неизвестный источник');
         if (action == 'remove') {
-            arity(args, kind == 'manager' ? 3 : 2, kind == 'manager' ? 3 : 2);
-__JZM_JZM_UCODE_7__
+__JZM_JZM_UCODE_6__
 )
-export JZM_UCODE_7
+export JZM_UCODE_6
 
-JZM_UCODE_8=$(cat <<'__JZM_JZM_UCODE_8__'
-let current = output(ctx, 'config-get-optional', ['NFQWS_OPT']);
-            apply(ctx, kind == 'manager' ? replace_group(current, '', args[2]) : remove_flowseal(current));
+JZM_UCODE_7=$(cat <<'__JZM_JZM_UCODE_7__'
+arity(args, kind == 'manager' ? 3 : 2, 3);
+            let current = output(ctx, 'config-get-optional', ['NFQWS_OPT']);
+            apply(ctx, length(args) == 3 ? replace_group(current, '', args[2]) : remove_flowseal(current));
             break;
         }
-        if (action == 'refresh') { arity(args, 2, 2); refresh_source(ctx, kind); break; }
         let wanted = index(['show', 'apply', 'compose', 'group'], action) != -1 ?
             map(slice(args, action == 'group' ? 3 : 2), strategy_key) : null;
         let data = source_data(ctx, kind, wanted), list = data.strategies;
@@ -4530,12 +3368,14 @@ let current = output(ctx, 'config-get-optional', ['NFQWS_OPT']);
                 push(selected, label_strategy(name, found[0].body));
             }
             let body = action == 'compose' ? compose_bodies(selected) : join('--new\n', selected);
-            if (action == 'group') body = replace_group(output(ctx, 'config-get-optional', ['NFQWS_OPT']), body, args[2]);
+            if (action == 'group') {
+                check(strategy_group(slice(args, 3)[0]) == args[2], 'стратегия не относится к выбранной группе');
+                body = replace_group(output(ctx, 'config-get-optional', ['NFQWS_OPT']), body, args[2]);
+            }
             if (action == 'show') print(body);
             else {
                 check(ctx.profile == 'zapret' && fs.stat(ctx.config), 'сначала установите Zapret');
                 initialize_lists(ctx);
-                prepare_assets(ctx, kind, body, data);
                 apply(ctx, body);
             }
             break;
@@ -4543,14 +3383,14 @@ let current = output(ctx, 'config-get-optional', ['NFQWS_OPT']);
         if (action == 'export') {
             arity(args, 3, 3);
             check(match(args[2], /^[A-Za-z0-9_-]+\.txt$/), 'неверное имя файла каталога');
-            send(ctx, 'state-write', [args[2]], data.catalog);
+            send(ctx, 'state-write', [args[2]], join('', map(filter(list, (s) => (kind == 'manager' || strategy_group(s.name) == null)),
+                (s) => '#' + s.name + '\n' + s.body)));
             break;
         }
         check(action == 'benchmark' || action == 'auto-best', 'неизвестное действие источника');
         arity(args, 3, 3);
         initialize_lists(ctx);
-        for (let s in list) prepare_assets(ctx, kind, s.body, data);
-        benchmark(ctx, [args[2]], action == 'auto-best', kind, data);
+        benchmark(ctx, [args[2]], action == 'auto-best', { ...data, strategies: filter(list, (s) => (kind == 'manager' || strategy_group(s.name) == null)) });
         break;
     }
     case 'status': case 'doctor': case 'recover':
@@ -4580,8 +3420,16 @@ let current = output(ctx, 'config-get-optional', ['NFQWS_OPT']);
         }
         break;
     case 'strategy':
-        check(length(args) > 0, 'strategy: list/show/apply/import/validate');
-        if (args[0] == 'list') {
+        check(length(args) > 0, 'strategy: list/show/apply/import/validate/clear');
+        if (args[0] == 'clear') {
+            arity(args, 1, 1);
+            check(fs.stat(ctx.config), 'Zapret не установлен');
+            if (length(trim(configured_strategy(ctx))) ||
+                trim(output(ctx, 'config-get-optional', ['NFQWS_ENABLE'])) != '0' || service_running(ctx) != false)
+                apply(ctx, '');
+            else if (read_applied(ctx)?.applied_hash != strategy_hash('')) persist_applied(ctx, '');
+        }
+        else if (args[0] == 'list') {
             arity(args, 1, 2);
             for (let s in catalog(ctx, args[1])) printf('%s\n', s.name);
         }
@@ -4623,7 +3471,7 @@ let current = output(ctx, 'config-get-optional', ['NFQWS_OPT']);
             if (args[2]) catalog(ctx, args[2]);
         }
         if (args[0] != 'off' && length(args) == 2) {
-            send(ctx, 'state-write', ['scheduled.txt'], resource(ctx.home, 'strategies.txt'));
+            send(ctx, 'state-write', ['scheduled.txt'], resource(ctx.resources, 'strategies.txt'));
             push(args, ctx.state + '/scheduled.txt');
         }
         run(ctx, 'schedule', [ctx.file, ...args]);
@@ -4687,6 +3535,7 @@ try {
         ctx.state = ctx.root + '/etc/zapret-manager';
         ctx.base = ctx.root + '/opt/zapret';
         ctx.config = ctx.root + '/etc/config/zapret';
+        ctx.assets = ctx.state + '/assets';
     }
     if ((command == 'manager-install' || command == 'manager-uninstall' || command == 'uninstall') && getenv('DESTDIR')) {
         let destination = getenv('DESTDIR');
@@ -4695,6 +3544,7 @@ try {
         ctx.state = ctx.root + '/etc/zapret-manager';
         ctx.base = ctx.root + '/opt/zapret';
         ctx.config = ctx.root + '/etc/config/zapret';
+        ctx.assets = ctx.state + '/assets';
     }
     if (command == 'uninstall') {
         arity(args, 1, 1);
@@ -4719,6 +3569,7 @@ try {
          (args[0] == 'network' && args[3] == 'status'))) || index(['status', 'doctor', 'test', 'recover', 'blockcheck', 'manager-check'], command) != -1 ||
         (command == 'network' && args[0] == 'status') ||
         (command == 'devices' && args[0] == 'list') ||
+        (command == 'fake' && args[0] == 'list') ||
         (command == 'source' && index(['list', 'show'], args[0]) != -1) ||
         (command == 'strategy' && index(['list', 'show', 'validate'], args[0]) != -1) ||
         (command == 'config' && index(['show', 'get'], args[0]) != -1) ||
@@ -4748,11 +3599,11 @@ catch (e) {
     warn('jzm: ' + e.message + '\n');
     exit(1);
 }
-__JZM_JZM_UCODE_8__
+__JZM_JZM_UCODE_7__
 )
-export JZM_UCODE_8
+export JZM_UCODE_7
 
-JZM_PARTS=8
+JZM_PARTS=7
 export JZM_PARTS
 # Source is compiled in memory. Separate environment values stay below Linux's
 # per-argument limit; stdin remains available to the terminal menu and blockcheck.

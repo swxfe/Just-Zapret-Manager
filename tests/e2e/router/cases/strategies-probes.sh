@@ -8,7 +8,7 @@ url_probe() {
 }
 benchmark_preserves_state() {
     cp "$conf" "$root/before"
-    jzm source show manager v7 > "$root/bench-catalog.txt"
+    jzm source show flowseal base_general > "$root/bench-catalog.txt"
     printf '%s\n' 'http://127.0.0.1/luci-static/resources/view/zapret/settings.js' > "$root/targets.txt"
     jzm service stop
     jzm benchmark "$root/targets.txt" "$root/bench-catalog.txt"
@@ -19,19 +19,19 @@ benchmark_preserves_state() {
     unchanged
 }
 compound_groups() {
-    jzm source compose manager v7 Yv08 Dv1 Gv1
+    jzm source compose flowseal base_general youtube_general discord_general games_general
     jzm config get NFQWS_OPT > "$root/opts"
-    for name in v7 Yv08 Dv1 Gv1; do [ "$(grep -c "^#$name\$" "$root/opts")" -eq 1 ]; done
-    [ "$(grep -c '^--new$' "$root/opts")" -eq 4 ]
+    for name in base_general youtube_general discord_general games_general; do [ "$(grep -c "^#$name\$" "$root/opts")" -eq 1 ]; done
+    [ "$(grep -c '^--new$' "$root/opts")" -eq 5 ]
     health
-    jzm source group manager base v3
+    jzm source group flowseal base base_general_alt
     jzm config get NFQWS_OPT > "$root/opts"
-    for name in v3 Yv08 Dv1 Gv1; do [ "$(grep -c "^#$name\$" "$root/opts")" -eq 1 ]; done
-    reject grep -q '^#v7$' "$root/opts"
+    for name in base_general_alt youtube_general discord_general games_general; do [ "$(grep -c "^#$name\$" "$root/opts")" -eq 1 ]; done
+    reject grep -q '^#base_general$' "$root/opts"
     health
 }
 flowseal() {
-    jzm source refresh flowseal
+    jzm source list flowseal
     jzm source list flowseal > "$root/flowseal-names"
     name=$(sed -n '1p' "$root/flowseal-names")
     if grep -q '^general$' "$root/flowseal-names"; then name=general; fi
@@ -44,14 +44,14 @@ flowseal() {
     grep -q "^#$name\$" "$root/opts"
     [ "$(jzm source show flowseal "$name")" = "$(jzm config get NFQWS_OPT)" ]
     health
-    jzm source group manager games Gv1
+    jzm source group flowseal games games_general
     jzm config get NFQWS_OPT > "$root/opts"
     grep -q "^#$name\$" "$root/opts"
-    [ "$(grep -c '^#Gv1$' "$root/opts")" -eq 1 ]
+    [ "$(grep -c '^#games_general$' "$root/opts")" -eq 1 ]
     health
-    jzm source remove manager games
+    jzm source remove flowseal games
     jzm config get NFQWS_OPT > "$root/opts"
     grep -q "^#$name\$" "$root/opts"
-    reject grep -q '^#Gv1$' "$root/opts"
+    reject grep -q '^#games_general$' "$root/opts"
     health
 }

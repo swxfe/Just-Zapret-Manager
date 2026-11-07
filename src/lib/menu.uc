@@ -5,6 +5,7 @@ import { VERSION } from 'resources';
 import { update_status, check_update, apply_update } from 'manager';
 import { strategy_key, strategy_group, strategy_title, strategy_order } from 'strategies';
 import { source_data } from 'sources';
+import { current_fakes, fake_catalog, group_fakes } from 'fakes';
 import { device_list, excluded } from 'devices';
 import { zapret_status, strategy_state, group_state } from 'status';
 
@@ -94,42 +95,41 @@ function choose_strategy(ctx, kind, group) {
             try {
                 let data = source_data(ctx, kind);
                 list = data.strategies; revision = data.revision;
-                if (group != null) list = filter(list, (s) => strategy_group(s.name) == group);
+                list = filter(list, (s) => group != null ? strategy_group(s.name) == group : strategy_group(s.name) == null);
                 sort(list, strategy_order);
                 problem = length(list) ? '' : 'В каталоге нет стратегий этой группы.';
             }
             catch (e) { list = []; problem = e.message; }
         }
         let state = strategy_state(ctx);
-        screen(kind == 'flowseal' ? 'Пресеты Flowseal' : 'Выбор · ' +
+        screen(group == null ? 'Пресеты Flowseal' : 'Выбор · ' +
             { base: 'Базовый трафик', youtube: 'YouTube', discord: 'Discord', games: 'Игры' }[group]);
-        if (kind == 'flowseal') current_strategy(state);
+        if (group == null) current_strategy(state);
         else printf('Сейчас: %s\n\n', paint('35;1', group_state(state.sections, group)));
         let first = page * 12;
         if (length(problem)) printf('%s\n\n', paint('33', problem));
         else {
             for (let i = first; i < length(list) && i < first + 12; i++) {
                 let active = length(filter(state.sections, (s) => s.name == strategy_key(list[i].name) && !s.changed)) > 0;
-                menu_line(i + 1, paint(active ? '32;1' : '0', strategy_title(list[i].name)) + (active ? '  ← выбрана' : ''));
+                menu_line(i + 1, paint(active ? '32;1' : '0', strategy_title(list[i].name)) + (length(list[i].missing || []) ? ' · нет фейка: ' + join(', ', list[i].missing) : '') + (active ? '  ← выбрана' : ''));
             }
             printf('\n%s\n', paint('2', 'Каталог: ' + (revision == 'встроенный' ? revision : substr(revision, 0, 8))));
         }
         if (length(list) > 12) printf('  n. Далее   p. Назад по списку   (%d/%d)\n', page + 1, int((length(list) + 11) / 12));
-        menu_line('u', 'Обновить каталог');
-        menu_line('d', kind == 'flowseal' ? 'Отключить Flowseal, оставить другие стратегии' : 'Отключить эту группу');
+        menu_line('d', group == null ? 'Отключить Flowseal, оставить другие стратегии' : 'Отключить эту группу');
         menu_line('0', 'Отмена'); print('\n');
         let value = prompt('Выбор', null);
         if (value == null || value == '' || value == '0') return null;
         value = lc(value);
         if (value == 'd') return { disable: true };
-        if (value == 'u') {
-            perform(() => command(ctx, ['source', 'refresh', kind]));
-            list = null; page = 0; continue;
-        }
         if (value == 'n') { if (first + 12 < length(list)) page++; continue; }
         if (value == 'p') { if (page) page--; continue; }
         if (!match(value, /^[0-9]+$/) || +value <= first || +value > length(list) || +value > first + 12) {
             print('Нет такого пункта на этой странице.\n'); pause(); continue;
+        }
+        if (length(list[+value - 1].missing || [])) {
+            print('Нет фейков Flowseal: ' + join(', ', list[+value - 1].missing) + '.\n');
+            pause(); continue;
         }
         return list[+value - 1];
     }
@@ -149,11 +149,15 @@ function edit_group(ctx, group) {
 }
 
 function compose_menu(ctx) {
-    let groups = ['base', 'youtube', 'discord', 'games'];
-    let labels = ['Базовый трафик:', 'YouTube:       ', 'Discord:       ', 'Игры:          '];
+    let groups = ['base', 'youtube', 'discord'];
+    let labels = ['Базовый трафик:', 'YouTube:       ', 'Discord:       '];
     while (!ended) {
         let state = strategy_state(ctx), available = [];
-        try { available = source_data(ctx, 'manager').strategies; } catch (e) { /* Picker offers catalog repair. */ }
+        if (length(filter(state.sections, (section) => match(section.name || '', /^general(_|$)/)))) {
+            print('Сначала очистите текущую стратегию Flowseal: пункт «Очистить стратегию».\n');
+            pause(); return;
+        }
+        try { available = source_data(ctx, 'manager').strategies; } catch (e) { /* A missing archive is reported by the picker. */ }
         screen('Собрать стратегию'); current_strategy(state);
         for (let i = 0; i < length(groups); i++) {
             let names = cached(ctx, 'menu-group:' + groups[i], () => {
@@ -170,7 +174,7 @@ function compose_menu(ctx) {
         menu_line('0', 'Назад'); print('\n');
         let value = prompt('Выбор', null);
         if (value == null || value == '' || value == '0') return;
-        if (!match(value, /^[1-4]$/)) { print('Нет такого пункта.\n'); pause(); continue; }
+        if (!match(value, /^[1-3]$/)) { print('Нет такого пункта.\n'); pause(); continue; }
         edit_group(ctx, groups[+value - 1]);
     }
 }
@@ -203,18 +207,95 @@ function test_menu(ctx) {
     }
 }
 
+function fake_purpose(slot) {
+    let names = {
+        'fake-tls': 'TLS', 'fake-http': 'HTTP', 'fake-quic': 'QUIC',
+        'fake-discord': 'Discord', 'fake-stun': 'STUN', 'fake-unknown-udp': 'UDP',
+        'fake-unknown': 'Другой трафик', 'fake-syn': 'SYN',
+        'split-seqovl-pattern': 'Шаблон перекрытия'
+    };
+    let key = replace(slot.option, /^--dpi-desync-/, '');
+    return names[key] || key;
+}
+
+function choose_fake(ctx, slot) {
+    let list = fake_catalog(ctx, 'flowseal'), page = 0;
+    while (!ended) {
+        screen('Фейки · замена');
+        print(slot.filename + ' → ' + fake_purpose(slot) + '\n');
+        print('Каталог Flowseal · выбирайте файл подходящего формата.\n\n');
+        let first = page * 12;
+        for (let i = first; i < length(list) && i < first + 12; i++)
+            menu_line(i + 1, list[i] + (list[i] == slot.filename ? ' (текущий)' : ''));
+        if (length(list) > 12) printf('  n. Далее   p. Назад · %d/%d\n', page + 1, int((length(list) + 11) / 12));
+        menu_line('0', 'Отмена');
+        let value = prompt('Файл', null);
+        if (value == null || value == '' || value == '0') return null;
+        if (value == 'n') { if (first + 12 < length(list)) page++; continue; }
+        if (value == 'p') { if (page) page--; continue; }
+        if (match(value, /^[0-9]+$/) && +value > first && +value <= length(list) && +value <= first + 12)
+            return list[+value - 1];
+        print('Нет такого пункта на этой странице.\n'); pause();
+    }
+    return null;
+}
+
+function fake_menu(ctx) {
+    while (!ended) {
+        let groups = group_fakes(current_fakes(ctx));
+        if (!length(groups)) {
+            screen('Фейки');
+            print('В текущей стратегии нет .bin файлов для замены.\n');
+            pause(); return;
+        }
+        let labels = map(groups, (g) => join(', ', g.sections) + ' — ' + g.filename);
+        let selected = choice('Фейки', labels);
+        if (!selected) return;
+        let group = groups[selected - 1], slot = group.slots[0];
+        if (length(group.slots) > 1) {
+            let use = choice(group.filename + ' · где заменить', map(group.slots,
+                (s) => fake_purpose(s) + ' · ' + s.section + ' · профиль ' + s.profile));
+            if (!use) continue;
+            slot = group.slots[use - 1];
+        }
+        let name = choose_fake(ctx, slot);
+        if (!name) continue;
+        printf('\n%s · профиль %d · %s\n', slot.section, slot.profile, slot.option);
+        if (!confirm(slot.filename + ' → ' + name)) continue;
+        perform(() => {
+            command(ctx, ['fake', 'replace', '' + slot.line, slot.path, 'flowseal', name]);
+            print('Фейк заменён.\n');
+        });
+    }
+}
+
 function strategy_menu(ctx) {
     while (!ended) {
-        screen('Zapret: Стратегии'); current_strategy(strategy_state(ctx));
+        let state = strategy_state(ctx);
+        screen('Zapret: Стратегии'); current_strategy(state);
         menu_line('1', 'Стратегии Flowseal');
-        menu_line('2', 'Собрать: основная + YouTube + Discord + игры');
+        menu_line('2', 'Собрать: основная + YouTube + Discord');
         menu_line('3', 'Тестирование и автоподбор');
+        menu_line('4', 'Игры · ' + group_state(state.sections, 'games'));
+        menu_line('5', 'Фейки: текущие файлы и замена');
+        menu_line('6', 'Очистить стратегию');
         print('\n'); menu_line('f', 'Загрузить свою стратегию из файла');
         menu_line('0', 'Назад'); print('\n');
         let value = prompt('Выбор', null);
         if (value == null || value == '' || value == '0') return;
         if (value == '2') { compose_menu(ctx); continue; }
         if (value == '3') { test_menu(ctx); continue; }
+        if (value == '4') { edit_group(ctx, 'games'); continue; }
+        if (value == '5') { fake_menu(ctx); continue; }
+        if (value == '6') {
+            if (confirm('Очистить все текущие стратегии и остановить Zapret')) {
+                perform(() => {
+                    command(ctx, ['strategy', 'clear']);
+                    print(length(strategy_state(ctx).sections) ? 'Очистка отменена.\n' : 'Стратегия очищена.\n');
+                });
+            }
+            continue;
+        }
         if (lc(value) == 'f') {
             perform(() => {
                 let file = local_file('Файл стратегии', '/root/custom.txt');
@@ -289,7 +370,7 @@ function hosts_menu(ctx) {
         if (!c) return;
         let kind = kinds[c - 1];
         while (!ended) {
-            let action = choice('Список: ' + kind, ['Показать', 'Добавить домены', 'Удалить домены', 'Заменить из файла', 'Обновить из источника']);
+            let action = choice('Список: ' + kind, ['Показать', 'Добавить домены', 'Удалить домены', 'Заменить из файла', 'Восстановить из установленных ассетов']);
             if (!action) break;
             perform(() => {
                 if (action == 1) command(ctx, ['hosts', kind, 'show']);
