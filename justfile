@@ -7,7 +7,7 @@ check:
     sh tools/check.sh
 
 # 2. Модульные, интеграционные тесты и проверка обвязки эмулятора
-test: check
+test:
     sh tests/run.sh
 
 # 3. Сборка готового dist/just-zapret-manager.sh (после успешных тестов)

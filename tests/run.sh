@@ -7,10 +7,4 @@ export ZM_HOME JZM_HTTP_PROVIDER
 JZM_ASSETS_ARCHIVE=$ZM_HOME/.test-tmp/jzm-assets-fixture.tar.gz
 export JZM_ASSETS_ARCHIVE
 python3 tools/build-assets.py --fixtures --output "$JZM_ASSETS_ARCHIVE" >/dev/null
-sh tests/unit/run.sh
-sh tests/integration/run.sh
-sh tests/integration/packages.sh
-sh tests/safety/transactions.sh
-sh tests/safety/uninstall.sh
-sh tests/http/run.sh
-sh tests/e2e/run.sh selftest
+exec python3 -B tests/run.py

@@ -75,10 +75,9 @@ stop_emulator() {
     # The upstream launcher waits for QEMU without forwarding signals. setsid gives both our own PGID.
     kill -TERM "$EMU_PID" 2>/dev/null || :
     kill -TERM "-$EMU_PID" 2>/dev/null || :
-    attempt=0
-    while kill -0 "-$EMU_PID" 2>/dev/null && [ "$attempt" -lt 5 ]; do
-        sleep 1
-        attempt=$((attempt + 1))
+    stop_deadline=$(($(date +%s) + 5))
+    while kill -0 "-$EMU_PID" 2>/dev/null && [ "$(date +%s)" -lt "$stop_deadline" ]; do
+        sleep 0.05
     done
     kill -KILL "-$EMU_PID" 2>/dev/null || :
     kill -KILL "$EMU_PID" 2>/dev/null || :
@@ -184,7 +183,7 @@ wait_ssh() {
         if remote_limit "$limit" 'echo ready' > "$report/ssh-last.log" 2>&1; then
             grep -q '^ready$' "$report/ssh-last.log" && return 0
         fi
-        sleep 1
+        sleep 0.1
     done
     printf 'SSH не готов за %s секунд. UART: %s/console/\n' "$boot_timeout" "$report" >&2
     cat "$report/ssh-last.log" >&2 || :

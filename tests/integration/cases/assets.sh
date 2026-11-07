@@ -38,7 +38,7 @@ printf '3\n2\n2\n0\n0\n0\n' | JZM_CONFIG=$work/manager.json sh src/launcher.sh >
 grep -q 'Yv100.*нет фейка: missing-manager-only.bin' "$work/missing-manager.out"
 equal_file "$conf" "$work/assets-conf.before"
 assets_digest() {
-    find "$ZM_TEST_ROOT/etc/zapret-manager/assets" "$ZM_TEST_ROOT/opt/zapret/fakes" -type f -exec sha256sum {} \; | sort
+    find "$ZM_TEST_ROOT/etc/zapret-manager/assets" "$ZM_TEST_ROOT/opt/zapret/fakes" -type f -exec sha256sum {} + | sort
 }
 cli assets-install "$JZM_ASSETS_ARCHIVE" >/dev/null
 equal_file "$ZM_TEST_ROOT/opt/zapret/files/fake/tls_clienthello_max_ru.bin" "$work/package-max.before"

@@ -19,6 +19,23 @@ elif action == "report":
 elif action == "selftest":
     sys.path.insert(0, str(project / "tests/setup"))
     suite = unittest.defaultTestLoader.discover(str(project / "tests/e2e/host/selftests"))
+    sys.path.insert(0, str(project / "tests/support"))
+    from runner import Task, run
+
+    def cases(tests):
+        for test in tests:
+            if isinstance(test, unittest.TestSuite):
+                yield from cases(test)
+            else:
+                yield test
+
+    tasks = [Task(test.id(), (sys.executable, "-B", str(Path(__file__)), str(project),
+                             "selftest-case", test.id())) for test in cases(suite)]
+    sys.exit(run(tasks))
+elif action == "selftest-case":
+    sys.path.insert(0, str(project / "tests/setup"))
+    sys.path.insert(0, str(project / "tests/e2e/host/selftests"))
+    suite = unittest.defaultTestLoader.loadTestsFromName(sys.argv[3])
     sys.exit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())
 else:
     sys.exit("unknown host utility action")

@@ -2,7 +2,7 @@
 set -eu
 root=$1
 project=$(CDPATH='' cd -P "$(dirname "$0")/../.." && pwd)
-ucode_bin=${JZM_REAL_UCODE:-$(command -v ucode)}
+ucode_bin=${JZM_TEST_NATIVE_UCODE:-${JZM_REAL_UCODE:-$(command -v ucode)}}
 ubusd_bin=$(dirname "$(readlink -f "$ucode_bin")")/../sbin/ubusd
 bus='' provider=''
 cleanup() {
