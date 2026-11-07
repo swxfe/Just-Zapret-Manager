@@ -3,6 +3,7 @@
 !/dist/Zapret-Manager.sh
 !/dist/jzm-assets.tar.gz
 /.test-tmp/
+/.build-tmp/
 *.out
 /.emulator/
 nand-*/

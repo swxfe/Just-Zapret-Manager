@@ -8,7 +8,9 @@ the Linux filesystem (`~/src/just-zapret-manager`), not under `/mnt/c/`. Use nat
 ucode, UCI, Make and ShellCheck. `make test` runs static analysis, unit/integration
 checks and emulator tooling selftests. `make test-e2e` builds the bundle and runs
 the prepared OpenWrt emulator; `make emulator-setup` prepares its ignored assets.
-Run `sh tools/test-matrix.sh` for the local ucode matrix.
+Run `make test-matrix` for the local ucode matrix. `make help` lists all targets.
+`make clean` removes tracked release outputs and temporary directories; run it
+separately from builds/tests. The prepared emulator is preserved.
 
 ---
 

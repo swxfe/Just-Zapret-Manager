@@ -139,12 +139,18 @@ make dist
 
 | Команда | Результат |
 | --- | --- |
+| `make help` | Краткая справка по целям Makefile |
 | `make check` | Синтаксис shell, компиляция ucode и ShellCheck |
 | `make test` | Все локальные тесты, HTTP/TLS, проверка кэша и отсутствия fork в UI и самопроверка обвязки эмулятора |
 | `make bundle` | Тесты и сборка только кода JZM |
 | `make dist` | Тесты, код JZM и отдельный архив `dist/jzm-assets.tar.gz` |
 | `make emulator-setup` | Загрузка эмулятора и подготовка OpenWrt |
 | `make test-e2e` | Сборка и полный прогон на виртуальном роутере |
+| `make test-matrix` | Тесты и сборка на трёх версиях ucode |
+| `make clean` | Удаление `dist/`, `.test-tmp/` и `.build-tmp/`; исходники и эмулятор сохраняются |
+
+`make clean` запускается отдельно от других целей и удаляет также отслеживаемые
+релизные файлы. Для повторной сборки полного релиза выполните `make dist`.
 
 Эмулятор требует Linux x86_64, Python 3, SSH/SCP, `unzip` и `zstd`.
 В Ubuntu: `sudo apt-get install -y openssh-client unzip zstd`.
@@ -165,7 +171,7 @@ dist/      читаемый код JZM и отдельный архив ассе
 локальный архив фикстур и не обращается к upstream за ресурсами.
 Пользовательский вход — `jzm` без аргументов. Для тестов и автоматизации существует
 внутренний протокол: `JZM_MODE=command /usr/bin/jzm <команда>`.
-Перед изменениями прочитайте [AGENTS.md](AGENTS.md); дополнительная матрица ucode запускается через `sh tools/test-matrix.sh`.
+Перед изменениями прочитайте [AGENTS.md](AGENTS.md); дополнительная матрица ucode запускается через `make test-matrix`.
 
 ## Благодарности
 
