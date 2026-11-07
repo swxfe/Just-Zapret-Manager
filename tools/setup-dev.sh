@@ -54,4 +54,4 @@ for component in libubox ubus uci ucode ustream-ssl uclient; do
         -DOPENSSL=ON -DDIGEST_SUPPORT=ON -DUBUS_SUPPORT=ON -DBUILD_LUA=OFF -DBUILD_EXAMPLES=OFF -DRESOLV_SUPPORT=OFF -DSOCKET_SUPPORT=OFF
     cmake --build "$build_dir" --target install --parallel 2
 done
-printf '\nГотово: %s\nДобавьте %s/bin в PATH и выполните just bundle\n' "$variant" "$prefix"
+printf '\nГотово: %s\nДобавьте %s/bin в PATH и выполните make bundle\n' "$variant" "$prefix"

@@ -122,31 +122,29 @@ JZM проверяет сборку в `swxfe/just-zapret-manager`, ветка `
 
 ## Разработка
 
-Стек: **ucode + POSIX sh**, сборка через **just**. Работайте в Linux или WSL2;
+Стек: **ucode + POSIX sh**, сборка через **Make**. Работайте в Linux или WSL2;
 в WSL держите проект в домашнем каталоге Linux.
 
 ```sh
 git clone https://github.com/swxfe/just-zapret-manager.git
 cd just-zapret-manager
 sudo apt-get update
-sudo apt-get install -y git build-essential cmake ninja-build pkg-config libjson-c-dev libpcre2-dev libmd-dev libssl-dev shellcheck curl unzip python3 just
+sudo apt-get install -y git build-essential cmake ninja-build pkg-config libjson-c-dev libpcre2-dev libmd-dev libssl-dev shellcheck curl unzip python3 make
 sh tools/setup-dev.sh
 export PATH="$HOME/.local/share/jzm-dev/openwrt-25.12/bin:$PATH"
-just dist
+make dist
 ```
 
-Если в вашем дистрибутиве нет пакета `just`, установите его по
-[официальной инструкции](https://just.systems/man/en/packages.html).
 `tools/setup-dev.sh` собирает закреплённые версии ucode, UCI, ubus и HTTP/TLS-библиотек локально в `~/.local/share/jzm-dev/`.
 
 | Команда | Результат |
 | --- | --- |
-| `just check` | Синтаксис shell, компиляция ucode и ShellCheck |
-| `just test` | Все локальные тесты, HTTP/TLS, проверка кэша и отсутствия fork в UI и самопроверка обвязки эмулятора |
-| `just bundle` | Тесты и сборка только кода JZM |
-| `just dist` | Тесты, код JZM и отдельный архив `dist/jzm-assets.tar.gz` |
-| `just emulator-setup` | Загрузка эмулятора и подготовка OpenWrt |
-| `just test-e2e` | Сборка и полный прогон на виртуальном роутере |
+| `make check` | Синтаксис shell, компиляция ucode и ShellCheck |
+| `make test` | Все локальные тесты, HTTP/TLS, проверка кэша и отсутствия fork в UI и самопроверка обвязки эмулятора |
+| `make bundle` | Тесты и сборка только кода JZM |
+| `make dist` | Тесты, код JZM и отдельный архив `dist/jzm-assets.tar.gz` |
+| `make emulator-setup` | Загрузка эмулятора и подготовка OpenWrt |
+| `make test-e2e` | Сборка и полный прогон на виртуальном роутере |
 
 Эмулятор требует Linux x86_64, Python 3, SSH/SCP, `unzip` и `zstd`.
 В Ubuntu: `sudo apt-get install -y openssh-client unzip zstd`.
@@ -163,7 +161,7 @@ dist/      читаемый код JZM и отдельный архив ассе
 
 Исполняемая сборка содержит только код. Данные находятся в отдельном архиве,
 который распаковывается при установке; обычный запуск ничего не распаковывает.
-Для сборки релиза нужен интернет на компьютере сборки. `just test` использует
+Для сборки релиза нужен интернет на компьютере сборки. `make test` использует
 локальный архив фикстур и не обращается к upstream за ресурсами.
 Пользовательский вход — `jzm` без аргументов. Для тестов и автоматизации существует
 внутренний протокол: `JZM_MODE=command /usr/bin/jzm <команда>`.

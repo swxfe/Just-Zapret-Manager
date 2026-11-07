@@ -220,7 +220,7 @@ wait_ssh() {
 require_emulator() {
     for file in "$emulator/emulator.sh" "$emulator/qemu/qemu-system-aarch64" "$emulator/.jzm-release.json" \
         "$emulator/presets/cudy-wr3000p-v1.ini" "$emulator/images/$version/nand-wr3000p/.jzm-ready"; do
-        [ -s "$file" ] || { printf '%s\n' 'Эмулятор не подготовлен: выполните just emulator-setup' >&2; return 1; }
+        [ -s "$file" ] || { printf '%s\n' 'Эмулятор не подготовлен: выполните make emulator-setup' >&2; return 1; }
     done
 }
 stage preflight preflight "$@"

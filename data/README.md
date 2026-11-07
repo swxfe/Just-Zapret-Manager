@@ -1,7 +1,7 @@
 В этом каталоге находятся собственные настройки JZM.
 `manager-strategies.txt` сохраняет исходные игровые профили каталога Manager.
 
-`just dist` собирает чистый код `dist/Zapret-Manager.sh` (также
+`make dist` собирает чистый код `dist/Zapret-Manager.sh` (также
 `dist/just-zapret-manager.sh`) и отдельный `dist/jzm-assets.tar.gz`.
 
 Сборщик `tools/build-assets.py` получает фейки и списки только из

@@ -5,9 +5,9 @@ The primary objective: guarantee that this tool can never brick an OpenWrt route
 
 Development and all checks run in Linux / WSL2. Keep the working checkout on
 the Linux filesystem (`~/src/just-zapret-manager`), not under `/mnt/c/`. Use native Linux
-ucode, UCI, just and ShellCheck. `just test` runs static analysis, unit/integration
-checks and emulator tooling selftests. `just test-e2e` builds the bundle and runs
-the prepared OpenWrt emulator; `just emulator-setup` prepares its ignored assets.
+ucode, UCI, Make and ShellCheck. `make test` runs static analysis, unit/integration
+checks and emulator tooling selftests. `make test-e2e` builds the bundle and runs
+the prepared OpenWrt emulator; `make emulator-setup` prepares its ignored assets.
 Run `sh tools/test-matrix.sh` for the local ucode matrix.
 
 ---
@@ -108,7 +108,7 @@ Code is strictly invalid until proven functional and safe. An automated test fai
 ### 4.2. Zero-Regression Test Suite:
 - Every code modification must execute and pass the test suite:
   ```sh
-  just test
+  make test
   ```
 - **100% Pass Rate:** all existing checks (including all unit checks in `unit.uc`) must succeed.
 - Deleting, commenting out, or weakening test assertions to force a passing state is strictly prohibited.

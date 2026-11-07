@@ -13,5 +13,5 @@ fi
 sh "$project/tools/bundle.sh"
 # The same supervisor and Copy-on-Write implementation serve source and bundled installs.
 archive=${JZM_ASSETS_ARCHIVE:-$project/dist/jzm-assets.tar.gz}
-[ -f "$archive" ] || { printf '%s\n' 'Сначала соберите ассеты: just dist' >&2; exit 1; }
+[ -f "$archive" ] || { printf '%s\n' 'Сначала соберите ассеты: make dist' >&2; exit 1; }
 DESTDIR=$destination JZM_MODE=command /bin/sh "$project/dist/just-zapret-manager.sh" manager-install "$archive"
