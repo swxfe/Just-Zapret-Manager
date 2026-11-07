@@ -34,6 +34,18 @@ class RunnerTests(EmulatorFixture):
         self.assertIn({"name": "host/ssh_ready", "status": "fail"},
                       [{"name": c["name"], "status": c["status"]} for c in self.result()["cases"]])
 
+    def test_serial_runner_rejects_successful_guest_with_inexact_coverage(self):
+        mock = self.bin / "scp"
+        script = mock.read_text().replace(
+            '[ "$FAKE_MODE" = incomplete ] || touch "$last/complete"',
+            'printf "pass\\tunexpected-case\\t0\\n" >> "$last/results.tsv"\n'
+            '        [ "$FAKE_MODE" = incomplete ] || touch "$last/complete"')
+        mock.write_text(script)
+        completed = self.run_fixture("success")
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertFalse(self.result()["success"])
+        self.assertEqual(self.result()["coverage"]["unexpected"], ["unexpected-case"])
+
     def test_term_interrupts_wait_and_cleans_up(self):
         self.env["FAKE_MODE"] = "signal"
         process = subprocess.Popen(self.command(), env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

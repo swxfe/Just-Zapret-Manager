@@ -52,6 +52,13 @@ EOF
     test -s "$root/local-catalog"
 }
 blockcheck_restore() {
+    kind=${1:-all}
+    case "$kind" in
+        all) modes='success failure INT TERM HUP';;
+        stopped) modes='';;
+        success|failure|INT|TERM|HUP) modes=$kind;;
+        *) return 2;;
+    esac
     cp "$conf" "$root/before"
     cp /etc/zapret-manager/state.json "$root/blockcheck-state"
     cp -p /opt/zapret/blockcheck.sh "$root/blockcheck.original"
@@ -73,7 +80,7 @@ case "$(cat /tmp/jzm-e2e/blockcheck-mode)" in
 esac
 EOF
     mv -f /opt/zapret/.blockcheck.test /opt/zapret/blockcheck.sh
-    for mode in success failure INT TERM HUP; do
+    for mode in $modes; do
         printf '%s\n' "$mode" > "$root/blockcheck-mode"
         if [ "$mode" = success ]; then
             printf 'ready\n' | jzm blockcheck > "$root/blockcheck-output" 2>&1
@@ -84,6 +91,7 @@ EOF
         cmp "$root/blockcheck-state" /etc/zapret-manager/state.json
         unchanged
     done
+    [ "$kind" = all ] || [ "$kind" = stopped ] || return 0
     jzm service stop
     jzm service disable
     printf 'success\n' > "$root/blockcheck-mode"
@@ -97,6 +105,14 @@ EOF
     jzm service start
     health
 }
+# Each variant retains the same config, state, lock and service assertions.
+# Independent VM baselines let the signal variants run concurrently.
+blockcheck_success() { blockcheck_restore success; }
+blockcheck_failure() { blockcheck_restore failure; }
+blockcheck_int() { blockcheck_restore INT; }
+blockcheck_term() { blockcheck_restore TERM; }
+blockcheck_hup() { blockcheck_restore HUP; }
+blockcheck_stopped() { blockcheck_restore stopped; }
 rollback_after_write() {
     cp "$conf" "$root/before"
     cp -p /opt/zapret/sync_config.sh "$root/sync.original"

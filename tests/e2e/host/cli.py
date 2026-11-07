@@ -15,7 +15,19 @@ if action == "assets":
     except (OSError, ValueError, tarfile.TarError, zipfile.BadZipFile) as error:
         sys.exit(f"emulator-assets: {error}")
 elif action == "report":
-    reports.render(Path(sys.argv[3]), int(sys.argv[4]))
+    result = reports.render(Path(sys.argv[3]), int(sys.argv[4]))
+    # 10 means a valid report with failed assertions, distinct from rendering errors.
+    sys.exit(0 if result["success"] else 10)
+elif action == "parallel":
+    import shards
+    try:
+        sys.exit(shards.main(project))
+    except (OSError, ValueError) as error:
+        sys.exit(f"E2E: {error}")
+elif action == "case-list":
+    import os
+    import shards
+    print(" ".join(shards.selection(project, os.environ.get("E2E_CASES"))))
 elif action == "selftest":
     sys.path.insert(0, str(project / "tests/setup"))
     suite = unittest.defaultTestLoader.discover(str(project / "tests/e2e/host/selftests"))

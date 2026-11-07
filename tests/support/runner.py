@@ -23,7 +23,7 @@ def jobs():
     return int(value)
 
 
-def run(tasks, *, workers=None):
+def run(tasks, *, workers=None, cleanup_timeout=5):
     workers = jobs() if workers is None else workers
     if workers < 1:
         raise ValueError("workers must be positive")
@@ -50,7 +50,7 @@ def run(tasks, *, workers=None):
                 os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + cleanup_timeout
         while any(process.poll() is None for process, *_ in running) and time.monotonic() < deadline:
             time.sleep(0.02)
         for process, *_ in running:

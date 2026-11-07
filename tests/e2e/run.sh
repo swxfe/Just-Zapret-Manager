@@ -6,6 +6,9 @@ project=$(CDPATH='' cd -P "$(dirname "$0")/../.." && pwd)
 host_python() { python3 -B "$project/tests/e2e/host/cli.py" "$project" "$@"; }
 bootstrap_script() { cat "$project/tests/setup/router-bootstrap.sh"; }
 router_script() {
+    printf '#!/bin/sh\n# shellcheck disable=SC2329\n'
+    selected=$(host_python case-list)
+    printf "JZM_E2E_CASES='%s'\nexport JZM_E2E_CASES\n" "$selected"
     cat "$project/tests/e2e/router/common.sh" \
         "$project/tests/e2e/router/cases/configuration.sh" \
         "$project/tests/e2e/router/cases/hostlists-backups.sh" \
@@ -27,7 +30,11 @@ case "${1:-run}" in
         [ "$#" -eq 2 ] || exit 2
         case "$2" in bootstrap) bootstrap_script;; router) router_script;; *) exit 2;; esac
         exit;;
-    run) [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] || exit 2; shift; };;
+    run)
+        [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] || exit 2; shift; }
+        if [ "${E2E_WORKERS:-auto}" != 1 ]; then
+            exec python3 -B "$project/tests/e2e/host/cli.py" "$project" parallel
+        fi;;
     *) printf '%s\n' 'usage: tests/e2e/run.sh [run|setup|selftest]' >&2; exit 2;;
 esac
 
@@ -38,6 +45,8 @@ command_timeout=${E2E_COMMAND_TIMEOUT:-1800}
 port=${E2E_SSH_PORT:-8022}
 run=$(date -u +%Y%m%dT%H%M%SZ)-$$
 reports=$project/.test-tmp/e2e
+mkdir -p "$reports"
+reports=$(CDPATH='' cd -P "$reports" && pwd)
 report=$reports/$run
 mkdir -p "$report"
 printf 'E2E logs: %s\n' "$report"
@@ -54,6 +63,7 @@ remote_limit() {
     limit=$1; shift
     timeout --kill-after=5 "$limit" ssh -F /dev/null -T \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null \
+        -o ControlMaster=auto -o ControlPersist=30 -o "ControlPath=$runtime/ssh.sock" \
         -o BatchMode=yes -o IdentityAgent=none -o ConnectTimeout=2 \
         -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -p "$port" root@127.0.0.1 "$@"
 }
@@ -62,13 +72,21 @@ copy_to() {
     # Dropbear images may not include SFTP; legacy SCP works before package bootstrap.
     timeout --kill-after=5 60 scp -F /dev/null -O -q \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null \
+        -o ControlMaster=auto -o ControlPersist=30 -o "ControlPath=$runtime/ssh.sock" \
         -o BatchMode=yes -o IdentityAgent=none -o ConnectTimeout=2 -P "$port" "$1" "root@127.0.0.1:$2"
 }
 collect() {
     timeout --kill-after=2 20 scp -F /dev/null -O -q -r \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null \
+        -o ControlMaster=auto -o ControlPersist=30 -o "ControlPath=$runtime/ssh.sock" \
         -o BatchMode=yes -o IdentityAgent=none -o ConnectTimeout=2 -P "$port" \
         root@127.0.0.1:/tmp/jzm-e2e/report "$report/guest"
+}
+close_transport() {
+    if [ -n "$runtime" ] && [ -S "$runtime/ssh.sock" ]; then
+        timeout --kill-after=1 3 ssh -F /dev/null -S "$runtime/ssh.sock" -O exit -p "$port" root@127.0.0.1 \
+            > "$report/ssh-close.log" 2>&1 || :
+    fi
 }
 stop_emulator() {
     [ -n "$EMU_PID" ] || return 0
@@ -102,6 +120,9 @@ finish() {
         remote_limit 15 'uname -a; cat /etc/openwrt_release; ubus call system board; JZM_MODE=command /usr/bin/jzm status; uci show zapret; pgrep -a nfqws; nft list ruleset; logread | tail -n 150; df -h' \
             > "$report/diagnostics.log" 2>&1 || :
     fi
+    if [ -n "$runtime" ] && [ -S "$runtime/ssh.sock" ]; then
+        close_transport
+    fi
     stop_emulator
     if [ -n "$runtime" ]; then
         case "$runtime" in /tmp/jzm-e2e.*) rm -rf -- "$runtime";; esac
@@ -110,14 +131,21 @@ finish() {
         rm -f "$emulator/.e2e.lock/pid"
         if ! rmdir "$emulator/.e2e.lock"; then record fail cleanup_lock 0; rc=1; fi
     fi
-    if ! host_python report "$report" "$rc"; then
-        record fail render_report 0
-        rc=1
-        # A missing Python installation still leaves a report explaining the failed preflight.
-        awk -F '\t' 'BEGIN {print "TAP version 13"} {n++; print ($1=="fail"?"not ok":"ok"),n,"-",$2} END {print "1.."n}' \
-            "$report/host.tsv" > "$report/report.tap"
-        printf '%s\n' '{"success":false,"error":"report generator unavailable; see host.tsv and logs"}' > "$report/report.json"
-        printf '%s\n' 'E2E FAIL: report generator unavailable' | tee "$report/summary.txt"
+    if host_python report "$report" "$rc"; then
+        :
+    else
+        render_rc=$?
+        if [ "$render_rc" -eq 10 ]; then
+            if [ "$rc" -eq 0 ]; then rc=1; fi
+        else
+            record fail render_report 0
+            rc=1
+            # A missing Python installation still leaves a report explaining the failed preflight.
+            awk -F '\t' 'BEGIN {print "TAP version 13"} {n++; print ($1=="fail"?"not ok":"ok"),n,"-",$2} END {print "1.."n}' \
+                "$report/host.tsv" > "$report/report.tap"
+            printf '%s\n' '{"success":false,"error":"report generator unavailable; see host.tsv and logs"}' > "$report/report.json"
+            printf '%s\n' 'E2E FAIL: report generator unavailable' | tee "$report/summary.txt"
+        fi
     fi
     printf '%s\n' "$report" > "$reports/latest.txt"
     printf 'Отчёты: %s\n' "$report"
@@ -202,6 +230,10 @@ mkdir "$emulator/.e2e.lock" 2>/dev/null || { printf 'Другой E2E уже з�
 owned_lock=1
 printf '%s\n' "$$" > "$emulator/.e2e.lock/pid"
 active=''
+active=case_manifest
+E2E_CASES=$(host_python case-list)
+export E2E_CASES
+printf '%s\n' "$E2E_CASES" | tr ' ' '\n' > "$report/expected-cases.txt"
 active=copy_pristine_flash
 runtime=$(mktemp -d /tmp/jzm-e2e.XXXXXX)
 mkdir "$runtime/flash"
@@ -210,12 +242,14 @@ bootstrap_script > "$runtime/bootstrap.sh"
 router_script > "$runtime/router.sh"
 record pass copy_pristine_flash 0
 active=launch_emulator
-# Positional parameters are expanded by the session's shell, not by this launcher.
+# Each worker owns its flash, serial/monitor sockets and SSH forwarding.
+set -- -P cudy-wr3000p-v1 -w user -l user -u none -o "lan-forwards=$port:22" \
+    -n "$runtime/flash" -S "$runtime/console.sock" -m "$runtime/monitor.sock" -L "$report/console"
 # shellcheck disable=SC2016
-QEMU_BIN=$emulator/qemu/qemu-system-aarch64 setsid sh -c 'cd "$1" && exec ./emulator.sh -P cudy-wr3000p-v1 -w user -l user -u none -o "lan-forwards=$6:22" -n "$2" -S "$3" -m "$4" -L "$5"' \
-    jzm-emulator "$emulator" "$runtime/flash" "$runtime/console.sock" "$runtime/monitor.sock" "$report/console" "$port" \
-    > "$report/emulator.log" 2>&1 </dev/null &
+QEMU_BIN=$emulator/qemu/qemu-system-aarch64 setsid sh -c 'cd "$1"; shift; exec ./emulator.sh "$@"' \
+    jzm-emulator "$emulator" "$@" > "$report/emulator.log" 2>&1 </dev/null &
 EMU_PID=$!
+printf '%s\n' "$EMU_PID" > "$report/emulator.pid"
 record pass launch_emulator 0
 active=''
 stage ssh_ready wait_ssh

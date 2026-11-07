@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+FAKE_ROOT=${E2E_WORKSPACE:-$FAKE_ROOT}
+export FAKE_ROOT
 for argument in "$@"; do request=$argument; done
 case "$request" in
     'echo ready') [ "$FAKE_MODE" != timeout ] && [ -f "$FAKE_ROOT/emulator-pid" ] || exit 255; echo ready;;

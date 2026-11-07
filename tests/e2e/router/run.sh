@@ -1,6 +1,14 @@
 #!/bin/sh
 set -eu
-cases='public_contract packages_luci live_status noop_preserves_process preset_label modified_label invalid_ports invalid_strategy service_cycle autostart settings hostlists backup_roundtrip invalid_backup url_probe benchmark_preserves_state compound_groups flowseal devices networking schedule noop_update manager_reinstall busy_lock failed_download github_rate_limit blockcheck_restore rollback_after_write interrupted_transaction uninstall_manager remove_packages'
+all_cases='public_contract packages_luci live_status noop_preserves_process preset_label modified_label invalid_ports invalid_strategy service_cycle autostart settings hostlists backup_roundtrip invalid_backup url_probe benchmark_preserves_state compound_groups flowseal devices networking schedule noop_update manager_reinstall busy_lock failed_download github_rate_limit blockcheck_success blockcheck_failure blockcheck_int blockcheck_term blockcheck_hup blockcheck_stopped rollback_after_write interrupted_transaction uninstall_manager remove_packages'
+cases=${JZM_E2E_CASES:-$all_cases}
+seen=' '
+for selected in $cases; do
+    case " $all_cases " in *" $selected "*) ;; *) exit 2;; esac
+    case "$seen" in *" $selected "*) exit 2;; esac
+    seen="$seen$selected "
+done
+[ -n "$cases" ] || exit 2
 case "${1:-}" in
 --case)
     [ "$#" -eq 2 ]

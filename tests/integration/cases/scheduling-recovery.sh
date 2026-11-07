@@ -41,6 +41,8 @@ while [ ! -f "$ZM_TEST_ROOT/probe-entered" ] && [ "$attempt" -lt 100 ]; do
 done
 [ -f "$ZM_TEST_ROOT/probe-entered" ]
 kill -TERM "$(cat "$lock/pid")"
+# The helper was blocked at probe-entered; release it only after the signal.
+rm -f "$ZM_TEST_ROOT/pause-probe"
 if wait "$job"; then printf '%s\n' 'interrupted benchmark succeeded unexpectedly' >&2; exit 1; fi
 equal_file "$conf" "$work/signal.before"
 equal_file "$statefile" "$work/signal-state.before"

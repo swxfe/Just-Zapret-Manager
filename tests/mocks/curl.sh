@@ -40,8 +40,12 @@ case "$url" in
 esac
 if [ -f "$ZM_TEST_ROOT/pause-probe" ]; then
     : > "$ZM_TEST_ROOT/probe-entered"
-    sleep 2
-    rm -f "$ZM_TEST_ROOT/pause-probe"
+    remaining=1000
+    while [ -f "$ZM_TEST_ROOT/pause-probe" ] && [ "$remaining" -gt 0 ]; do
+        sleep 0.01
+        remaining=$((remaining - 1))
+    done
+    [ ! -f "$ZM_TEST_ROOT/pause-probe" ] || exit 98
 fi
 if [ "$out" != /dev/null ]; then
     cat "$ZM_TEST_ROOT/download" > "$out"

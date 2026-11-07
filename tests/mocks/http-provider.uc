@@ -22,8 +22,11 @@ function request(url, options) {
     }
     if (flag('pause-probe')) {
         fs.writefile(root + '/probe-entered', '1');
-        sleep(2000);
-        fs.unlink(root + '/pause-probe');
+        // The test releases this gate after signaling the supervisor.
+        // Keep a bound so a broken test cannot leave a worker waiting forever.
+        let remaining = 1000;
+        while (flag('pause-probe') && remaining-- > 0) sleep(10);
+        if (flag('pause-probe')) die('test probe gate was not released');
     }
     if (!options.allow_http) {
         if (!length(reply.body)) reply.body = contents('download');

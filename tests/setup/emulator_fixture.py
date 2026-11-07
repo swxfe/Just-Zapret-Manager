@@ -23,12 +23,14 @@ class EmulatorFixture(unittest.TestCase):
             target = self.root / "tests/setup" / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(PROJECT / "tests/setup" / name, target)
+        (self.root / "tests/support").mkdir()
+        shutil.copyfile(PROJECT / "tests/support/runner.py", self.root / "tests/support/runner.py")
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
                     "FAKE_ROOT": self.root.as_posix(), "JZM_TEST_PYTHON": Path(sys.executable).as_posix(),
                     "E2E_OPENWRT_VERSION": "25.12.5", "E2E_BOOT_TIMEOUT": "2", "E2E_COMMAND_TIMEOUT": "15",
-                    "GITHUB_TOKEN": ""}
+                    "GITHUB_TOKEN": "", "E2E_WORKERS": "1"}
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             self.env["E2E_SSH_PORT"] = str(listener.getsockname()[1])

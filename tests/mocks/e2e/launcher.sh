@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+FAKE_ROOT=${E2E_WORKSPACE:-$FAKE_ROOT}
+export FAKE_ROOT
 printf '%s\n' "$$" > "$FAKE_ROOT/emulator-pid"
 while [ "$#" -gt 0 ]; do
     if [ "$1" = -n ]; then
